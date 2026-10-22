@@ -1,58 +1,49 @@
-# Mess Matrix Backend Starter
+# Mess Matrix backend (diagram-aligned foundation)
 
-This is the first backend layer only: Express setup, MongoDB connection, basic security middleware, JSON parsing, a shared API rate limit, error handling, and a health endpoint. Authentication and meal features will be added in later steps.
+This backend starter aligns the foundational models and APIs with the submitted
+Mess Matrix abstract and class diagram. It includes authentication, role checks,
+Menu, MealSlot, Booking and cutoff locking. It also includes schema foundations
+for QRToken, CheckIn, ScanQueue, BillingLedger, Rebate and AnalyticsRecord.
 
-## 1. Requirements
+## Install and run
 
-- Node.js LTS installed
-- A MongoDB Atlas database, or a local MongoDB instance
+1. Back up your existing `backend` folder.
+2. Extract this folder's contents into `MessMatrix/backend/` (replace files only
+   after backing up).
+3. Run `npm install`.
+4. Copy `.env.example` to `.env`, then fill in MongoDB URI and strong random secrets.
+5. Run `npm run dev`.
 
-## 2. Install
+Generate a secret with:
+`node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`
 
-Open a terminal in this folder:
+Use a separate development database when migrating from the earlier ObjectId models.
+This version uses UUID strings for model IDs and references; old ObjectId-based data
+is not automatically migrated.
 
-```bash
-npm install
-```
+## Routes
 
-Copy `.env.example` to `.env` and replace the MongoDB URI with your real connection string.
+- `POST /api/auth/register` (creates STUDENT only)
+- `POST /api/auth/login`
+- `GET /api/auth/me` (Bearer token)
+- `POST /api/menu` (MESS_ADMIN)
+- `GET /api/menu`
+- `POST /api/meal-slots` (MESS_ADMIN or MESS_STAFF)
+- `GET /api/meal-slots`
+- `PUT /api/bookings/:mealSlotId` (Student's own booking)
+- `GET /api/bookings/my`
+- `GET /api/meal-slots/:mealSlotId/headcount` (MESS_ADMIN or MESS_STAFF)
+- `GET /api/admin/test` (MESS_ADMIN)
 
-PowerShell:
+## Important implementation notes
 
-```powershell
-Copy-Item .env.example .env
-```
-
-Do not commit `.env` or share your database password publicly.
-
-## 3. Run locally
-
-```bash
-npm run dev
-```
-
-Open:
-
-- `http://localhost:5000/`
-- `http://localhost:5000/api/health`
-
-Expected health response when MongoDB is connected:
-
-```json
-{
-  "success": true,
-  "service": "Mess Matrix API",
-  "database": "connected",
-  "timestamp": "..."
-}
-```
-
-## 4. Connect the existing Vite frontend
-
-The frontend runs on `http://localhost:5173` by default. This origin is already allowed in `.env.example`. If your frontend uses another origin, update `CLIENT_ORIGIN` and restart the backend.
-
-## Notes
-
-- The health endpoint reports database connectivity, not whether all project features are complete.
-- This starter does not yet implement users, authentication, meal schedules, booking, QR check-in, rebates, analytics, or offline sync.
-- Keep secrets in environment variables. Never put the MongoDB URI or JWT secret in frontend code.
+- `SlotStatus` stays exactly `UPCOMING`, `OPEN`, `CLOSED`.
+- Booking cutoff is separate: `bookingLocked` and `lockedAt`.
+- MealSlot `CLOSED` means service is finished, not merely cutoff reached.
+- Booking writes are conditional and checked against server time. The cutoff job
+  locks slots with a conditional atomic update; transactions are recommended for
+  future multi-document financial and redemption workflows.
+- QR, offline synchronization, rebates, surplus redistribution, audit ledger,
+  MealSync points and analytics are not fully implemented by this foundation.
+  Their schemas are provided as a map to the diagram, not as a claim that those
+  workflows are complete.

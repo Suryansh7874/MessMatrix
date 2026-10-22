@@ -1,60 +1,41 @@
-
 import cron from "node-cron";
-import Meal from "../models/Meal.js";
+import MealSlot from "../models/MealSlot.js";
 import Booking from "../models/Booking.js";
+import { BookingStatus } from "../utils/enums.js";
 
-export async function lockDueMeals() {
+export async function lockDueMealSlots() {
   const now = new Date();
-
-  const dueMeals = await Meal.find({
+  const due = await MealSlot.find({
     status: "OPEN",
-    cutoffAt: { $lte: now },
+    bookingLocked: false,
+    cutoffTime: { $lte: now }
   }).select("_id");
 
-  for (const dueMeal of dueMeals) {
-    // Atomically claim this meal for locking.
-    const lockedMeal = await Meal.findOneAndUpdate(
-      {
-        _id: dueMeal._id,
-        status: "OPEN",
-        cutoffAt: { $lte: now },
-      },
-      {
-        $set: {
-          status: "LOCKED",
-          lockedAt: now,
-        },
-      },
+  for (const candidate of due) {
+    // Claim the lock with a conditional atomic update.
+    const slot = await MealSlot.findOneAndUpdate(
+      { _id: candidate._id, status: "OPEN", bookingLocked: false, cutoffTime: { $lte: now } },
+      { $set: { bookingLocked: true, lockedAt: now } },
       { new: true }
     );
+    if (!slot) continue;
 
-    // Another worker may already have locked it.
-    if (!lockedMeal) continue;
-
-    const headcount = await Booking.countDocuments({
-      meal: lockedMeal._id,
-      choice: "OPTED_IN",
+    const finalHeadcount = await Booking.countDocuments({
+      mealSlotId: slot._id,
+      status: BookingStatus.OPTED_IN
     });
 
-    await Meal.updateOne(
-      { _id: lockedMeal._id, status: "LOCKED" },
-      { $set: { finalHeadcount: headcount } }
+    await MealSlot.updateOne(
+      { _id: slot._id, bookingLocked: true },
+      { $set: { finalHeadcount } }
     );
-
-    console.log(
-      `Meal ${lockedMeal._id} locked. Headcount: ${headcount}`
-    );
+    console.log(`Locked booking for slot ${slot._id}; final headcount ${finalHeadcount}`);
   }
 }
 
 export function startMealLockScheduler() {
   cron.schedule("* * * * *", async () => {
-    try {
-      await lockDueMeals();
-    } catch (error) {
-      console.error("Meal lock scheduler failed:", error);
-    }
+    try { await lockDueMealSlots(); }
+    catch (error) { console.error("Meal cutoff scheduler error:", error); }
   });
-
-  console.log("Meal lock scheduler started.");
 }
