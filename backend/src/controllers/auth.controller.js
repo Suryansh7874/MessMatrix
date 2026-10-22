@@ -1,17 +1,17 @@
 
-import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
-import { z } from "zod";
-import User from "../models/User.js";
+import bcrypt from "bcryptjs";  // Importing bcryptjs for password hashing and comparison
+import jwt from "jsonwebtoken";  // Importing jsonwebtoken for creating and verifying JWT tokens
+import { z } from "zod";  // Importing zod for schema validation
+import User from "../models/User.js";  // Importing the User model to interact with the users collection in MongoDB
 
 const registerSchema = z.object({
-  name: z.string().trim().min(2).max(80),
+  name: z.string().trim().min(2).max(80),  // Validating that the name is a string, trimmed, and between 2 and 80 characters
   email: z.string().trim().email().max(254),
   password: z.string().min(8).max(72),
 });
 
 const loginSchema = z.object({
-  email: z.string().trim().email().max(254),
+  email: z.string().trim().email().max(254),// Validating that the email is a string, trimmed, a valid email format, and not exceeding 254 characters
   password: z.string().min(1).max(72),
 });
 
@@ -22,7 +22,7 @@ function createToken(user) {
 
   return jwt.sign(
     { role: user.role },
-    process.env.JWT_SECRET,
+    process.env.JWT_SECRET,  
     {
       subject: user._id.toString(),
       expiresIn: "1h",
@@ -41,11 +41,11 @@ function publicUser(user) {
 
 export async function register(req, res, next) {
   try {
-    const parsed = registerSchema.safeParse(req.body);
+    const parsed = registerSchema.safeParse(req.body); // Validate the request body against the registration schema
 
     if (!parsed.success) {
       return res.status(400).json({
-        message: "Invalid registration details",
+        message: "Invalid registration details",        
         errors: parsed.error.issues.map((issue) => ({
           field: issue.path.join("."),
           message: issue.message,
@@ -57,7 +57,7 @@ export async function register(req, res, next) {
     const normalizedEmail = email.toLowerCase();
 
     const existingUser = await User.findOne({
-      email: normalizedEmail,
+      email: normalizedEmail,  // Check if a user with the same email already exists in the database
     });
 
     if (existingUser) {
@@ -66,13 +66,13 @@ export async function register(req, res, next) {
       });
     }
 
-    const hashedPassword = await bcrypt.hash(password, 12);
+    const hashedPassword = await bcrypt.hash(password, 12); // Hash the password using bcrypt with a salt round of 12 for security
 
     // Public registration can only create a STUDENT.
     const user = await User.create({
       name,
-      email: normalizedEmail,
-      password: hashedPassword,
+      email: normalizedEmail, // Store the email in lowercase to ensure uniqueness and consistency
+      password: hashedPassword, // Store the hashed password in the database for security
       role: "STUDENT",
     });
 
@@ -82,7 +82,7 @@ export async function register(req, res, next) {
     });
   } catch (error) {
     // Also handles duplicate-email races safely.
-    if (error.code === 11000) {
+    if (error.code === 11000) { // Duplicate key error code in MongoDB, indicating that a user with the same email already exists
       return res.status(409).json({
         message: "An account with this email already exists",
       });
@@ -106,7 +106,7 @@ export async function login(req, res, next) {
 
     const user = await User.findOne({
       email: email.toLowerCase(),
-    }).select("+password");
+    }).select("+password"); // Select the password field explicitly since it is excluded by default in the User model for security reasons
 
     if (!user) {
       return res.status(401).json({

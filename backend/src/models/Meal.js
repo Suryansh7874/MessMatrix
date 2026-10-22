@@ -35,6 +35,18 @@ const mealSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
+    
+    lockedAt: {
+      type: Date,
+      default: null,
+    },
+
+    finalHeadcount: {
+      type: Number,
+      default: null,
+      min: 0,
+    },
+
   },
   { timestamps: true }
 );

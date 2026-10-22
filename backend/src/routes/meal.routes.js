@@ -18,7 +18,7 @@ router.get("/", authenticate, getUpcomingMeals);
 router.post(
   "/",
   authenticate,
-  requireRole("ADMIN", "MESS_STAFF"),
+  requireRole("MESS_ADMIN", "MESS_STAFF"),
   createMeal
 );
 

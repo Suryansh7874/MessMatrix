@@ -7,10 +7,12 @@ export default async function connectDB() {
     throw new Error("MONGODB_URI is missing. Add it to backend/.env.");
   }
 
-  mongoose.set("strictQuery", true);
+  mongoose.set("strictQuery", true); // Suppress deprecation warning for strict query filtering.
+//what is strictQuery in mongoose
+// strictQuery is a Mongoose option that controls whether queries are strictly filtered based on the schema.
 
   await mongoose.connect(uri, {
-    serverSelectionTimeoutMS: 10000,
+    serverSelectionTimeoutMS: 10000, // Set a timeout for server selection to avoid hanging indefinitely.
   });
 
   console.log(`MongoDB connected: ${mongoose.connection.host}`);

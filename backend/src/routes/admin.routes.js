@@ -11,7 +11,7 @@ const router = Router();
 router.get(
   "/test",
   authenticate,
-  requireRole("ADMIN"),
+  requireRole("MESS_ADMIN"),
   (req, res) => {
     res.status(200).json({
       message: "Admin access granted.",
