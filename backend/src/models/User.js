@@ -12,7 +12,21 @@ const userSchema = new mongoose.Schema({
   studentId: { type: String, default: undefined },
   hostel: { type: String, default: undefined },
   course: { type: String, default: undefined },
-  employeeId: { type: String, default: undefined }
+  employeeId: { type: String, default: undefined },
+  resetPasswordTokenHash: {
+    type: String,
+    default: undefined,
+    select: false
+  },
+  resetPasswordExpiresAt: {
+    type: Date,
+    default: undefined,
+    select: false
+  },
+  tokenVersion: {
+    type: Number,
+    default: 0
+  }
 }, { timestamps: { createdAt: "createdAt", updatedAt: false }, versionKey: false });
 
 export default mongoose.model("User", userSchema);

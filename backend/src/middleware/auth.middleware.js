@@ -11,7 +11,15 @@ export async function authenticate(req, res, next) {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const user = await User.findById(decoded.sub);
     if (!user || !user.isActive) {
-      return res.status(401).json({ message: "Invalid or inactive account." });
+      return res.status(401).json({
+        message: "Invalid or inactive account."
+      });
+    }
+
+    if ((decoded.tokenVersion ?? 0) !== (user.tokenVersion ?? 0)) {
+      return res.status(401).json({
+        message: "Session expired. Please log in again."
+      });
     }
     req.user = {
       id: user._id,
