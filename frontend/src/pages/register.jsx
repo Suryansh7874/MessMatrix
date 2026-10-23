@@ -1,10 +1,11 @@
 
 import { useState } from "react";
 import { Link } from "react-router-dom";
+import api from "../services/api.js";
 
 export default function Register() {
   const [formData, setFormData] = useState({
-    fullName: "",
+    name: "",
     email: "",
     password: "",
     confirmPassword: "",
@@ -13,9 +14,6 @@ export default function Register() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
-
-  const API_URL =
-    import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -35,7 +33,7 @@ export default function Register() {
     setSuccess("");
 
     if (
-      !formData.fullName.trim() ||
+      !formData.name.trim() ||
       !formData.email.trim() ||
       !formData.password ||
       !formData.confirmPassword
@@ -44,50 +42,45 @@ export default function Register() {
       return;
     }
 
+    if (formData.name.trim().length < 2) {
+      setError("Name must contain at least 2 characters.");
+      return;
+    }
+
     if (formData.password !== formData.confirmPassword) {
       setError("Your passwords do not match.");
       return;
     }
 
-    if (formData.password.length < 6) {
-      setError("Password must contain at least 6 characters.");
+    if (formData.password.length < 8 || formData.password.length > 72) {
+      setError("Password must contain between 8 and 72 characters.");
       return;
     }
 
     setLoading(true);
-
     try {
-      const response = await fetch(`${API_URL}/auth/register`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          fullName: formData.fullName.trim(),
-          email: formData.email.trim(),
-          password: formData.password,
-        }),
+      const response = await api.post("/auth/register", {
+        name: formData.name.trim(),
+        email: formData.email.trim(),
+        password: formData.password,
       });
 
-      const data = await response.json();
-
-      if (!response.ok || data.success === false) {
-        throw new Error(data.message || "Registration failed.");
-      }
-
+      const data = response.data;
       setSuccess(
-        data.message || "Account created successfully! You can now sign in."
+        data.message || "Registration successful! You can now sign in."
       );
-
       setFormData({
-        fullName: "",
+        name: "",
         email: "",
         password: "",
         confirmPassword: "",
       });
     } catch (err) {
       setError(
-        err.message || "Unable to connect to the server. Please try again."
+        err.response?.data?.message ||
+          err.response?.data?.error?.message ||
+          err.message ||
+          "Unable to register. Please try again."
       );
     } finally {
       setLoading(false);
@@ -95,7 +88,7 @@ export default function Register() {
   };
 
   const filledFields = [
-    formData.fullName,
+    formData.name,
     formData.email,
     formData.password,
     formData.confirmPassword,
@@ -996,13 +989,13 @@ export default function Register() {
 
             <form className="invitation-form" onSubmit={handleSubmit}>
               <div className="invitation-field">
-                <label htmlFor="register-fullName">Full name</label>
+                <label htmlFor="register-name">Name</label>
                 <input
-                  id="register-fullName"
+                  id="register-name"
                   type="text"
-                  name="fullName"
-                  placeholder="Enter your full name"
-                  value={formData.fullName}
+                  name="name"
+                  placeholder="Enter your Full name"
+                  value={formData.name}
                   onChange={handleChange}
                   autoComplete="name"
                   required
@@ -1033,7 +1026,7 @@ export default function Register() {
                   value={formData.password}
                   onChange={handleChange}
                   autoComplete="new-password"
-                  minLength={6}
+                  minLength={8}
                   required
                 />
               </div>
@@ -1050,7 +1043,7 @@ export default function Register() {
                   value={formData.confirmPassword}
                   onChange={handleChange}
                   autoComplete="new-password"
-                  minLength={6}
+                  minLength={8}
                   required
                 />
               </div>

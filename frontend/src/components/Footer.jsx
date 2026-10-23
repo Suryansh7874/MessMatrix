@@ -13,7 +13,7 @@ export default function Footer() {
       <div className="footer-shade" />
       <div className="footer-inner">
         <div className="footer-brand">
-          <a href="#home" className="brand-mark"><span className="brand-seal">✺</span><span><strong>MESS MATRIX</strong><small>KAMAR-TAJ REFECTORY</small></span></a>
+          <a href="#home" className="brand-mark"><span className="brand-seal">✺</span><span><strong>MESSMATRIX</strong><small>KAMAR-TAJ REFECTORY</small></span></a>
           <p>Good food, a clear mind, and a place to belong.<br />Your campus dining experience, thoughtfully reimagined.</p>
         </div>
         <div className="footer-links">

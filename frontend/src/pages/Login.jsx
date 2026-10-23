@@ -1,6 +1,7 @@
 
 import { useState } from "react";
-
+import { Link, useNavigate } from "react-router-dom";
+import api from "../services/api.js";
 const particles = Array.from({ length: 32 }, (_, i) => ({
   id: i,
   left: `${(i * 37 + 11) % 100}%`,
@@ -463,7 +464,7 @@ const styles = `
   width: 100%;
   height: 100%;
   padding: 0;
-  color: #f6f0e4;
+  color: #e9e6dfff;
   background: transparent;
   border: 0;
   outline: 0;
@@ -477,7 +478,7 @@ const styles = `
 
 .input-wrap input::placeholder {
   color: #737b80;
-  opacity: 1;
+  opacity: 0.7;
 }
 
 .password-heading {
@@ -769,23 +770,59 @@ const styles = `
 `;
 
 export default function Login() {
+  const navigate = useNavigate();
   const [showPassword, setShowPassword] = useState(false);
   const [remember, setRemember] = useState(false);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [formData, setFormData] = useState({ email: "", password: "" });
 
-  function handleLogin(event) {
+  function handleChange(event) {
+    const { name, value } = event.target;
+    setFormData((previous) => ({ ...previous, [name]: value }));
+    setMessage("");
+  }
+
+  async function handleLogin(event) {
     event.preventDefault();
     setMessage("");
-    setLoading(true);
 
-    // Demo only — connect your authentication API later.
-    setTimeout(() => {
-      setLoading(false);
+    if (!formData.email.trim() || !formData.password) {
+      setMessage("Please enter your email and password.");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const response = await api.post("/auth/login", {
+        email: formData.email.trim(),
+        password: formData.password,
+      });
+
+      const { token, user } = response.data;
+      if (!token) {
+        throw new Error("The server did not return an authentication token.");
+      }
+
+      const storage = remember ? localStorage : sessionStorage;
+      const otherStorage = remember ? sessionStorage : localStorage;
+      storage.setItem("token", token);
+      if (user) storage.setItem("user", JSON.stringify(user));
+      else storage.removeItem("user");
+      otherStorage.removeItem("token");
+      otherStorage.removeItem("user");
+
+      // App.jsx currently has no dashboard route, so return to the landing page.
+      navigate("/", { replace: true });
+    } catch (err) {
       setMessage(
-        "Demo portal ready. Authentication is not connected yet."
+        err.response?.data?.message ||
+          err.message ||
+          "Login failed. Please check your connection and try again."
       );
-    }, 900);
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (
@@ -896,6 +933,8 @@ export default function Login() {
                   type="email"
                   placeholder="you@example.com"
                   autoComplete="username"
+                  value={formData.email}
+                  onChange={handleChange}
                   required
                 />
               </div>
@@ -929,7 +968,9 @@ export default function Login() {
                   type={showPassword ? "text" : "password"}
                   placeholder="Enter your passcode"
                   autoComplete="current-password"
-                  minLength={6}
+                  minLength={8}
+                  value={formData.password}
+                  onChange={handleChange}
                   required
                 />
 
@@ -987,17 +1028,9 @@ export default function Login() {
             <div className="card-footer">
               <span>NEW TO THE SANCTUM?</span>
 
-              <button
-                className="text-link invitation-link"
-                type="button"
-                onClick={() =>
-                  setMessage(
-                    "Invitation requests will be added later."
-                  )
-                }
-              >
+              <Link className="text-link invitation-link" to="/register">
                 Request an invitation ↗
-              </button>
+              </Link>
             </div>
           </div>
 

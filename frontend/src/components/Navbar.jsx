@@ -14,7 +14,7 @@ export default function Navbar() {
       <nav className="nav-inner" aria-label="Main navigation">
         <a href="#home" className="brand-mark">
           <span className="brand-seal">✺</span>
-          <span><strong>MESS MATRIX</strong><small>KAMAR-TAJ REFECTORY</small></span>
+          <span><strong>MESSMATRIX</strong><small>KAMAR-TAJ REFECTORY</small></span>
         </a>
         <div className="desktop-nav">
           {links.map(link => <a key={link.label} href={link.href}>{link.label}</a>)}
