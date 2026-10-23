@@ -1,43 +1,32 @@
-
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { z } from "zod";
 import User from "../models/User.js";
+import { Role } from "../utils/enums.js";
 
 const registerSchema = z.object({
   name: z.string().trim().min(2).max(80),
   email: z.string().trim().email().max(254),
-  password: z.string().min(8).max(72),
+  password: z.string().min(8).max(72)
 });
-
 const loginSchema = z.object({
   email: z.string().trim().email().max(254),
-  password: z.string().min(1).max(72),
+  password: z.string().min(1).max(72)
 });
 
-function createToken(user) {
-  if (!process.env.JWT_SECRET) {
-    throw new Error("JWT_SECRET is not configured");
-  }
-
-  return jwt.sign(
-    { role: user.role },
-    process.env.JWT_SECRET,
-    {
-      subject: user._id.toString(),
-      expiresIn: "1h",
-    }
-  );
-}
-
 function publicUser(user) {
-  return {
-    id: user._id,
-    name: user.name,
-    email: user.email,
-    role: user.role,
-  };
+  return { id: user._id, name: user.name, email: user.email, role: user.role };
 }
+function issueToken(user) {
+  if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
+    throw new Error("JWT_SECRET must be configured with at least 32 characters.");
+  }
+  return jwt.sign({ role: user.role }, process.env.JWT_SECRET, {
+    subject: user._id,
+    expiresIn: "1h"
+  });
+}
+
 
 export async function register(req, res, next) {
   try {
@@ -46,51 +35,39 @@ export async function register(req, res, next) {
     if (!parsed.success) {
       return res.status(400).json({
         message: "Invalid registration details",
-        errors: parsed.error.issues.map((issue) => ({
-          field: issue.path.join("."),
-          message: issue.message,
-        })),
+        errors: parsed.error.issues
       });
     }
 
-    const { name, email, password } = parsed.data;
-    const normalizedEmail = email.toLowerCase();
+    const { name } = parsed.data;
+    const email = parsed.data.email.toLowerCase();
 
-    const existingUser = await User.findOne({
-      email: normalizedEmail,
-    });
+    // Hash the original password
+    const passwordHash = await bcrypt.hash(parsed.data.password, 12);
 
-    if (existingUser) {
-      return res.status(409).json({
-        message: "An account with this email already exists",
-      });
-    }
-
-    const hashedPassword = await bcrypt.hash(password, 12);
-
-    // Public registration can only create a STUDENT.
+    // Store the hash under the MongoDB field "password"
     const user = await User.create({
       name,
-      email: normalizedEmail,
-      password: hashedPassword,
-      role: "STUDENT",
+      email,
+      password: passwordHash,
+      role: Role.STUDENT
     });
 
     return res.status(201).json({
       message: "Registration successful",
-      user: publicUser(user),
+      user: publicUser(user)
     });
   } catch (error) {
-    // Also handles duplicate-email races safely.
     if (error.code === 11000) {
       return res.status(409).json({
-        message: "An account with this email already exists",
+        message: "An account with this email already exists."
       });
     }
 
     next(error);
   }
 }
+
 
 export async function login(req, res, next) {
   try {
@@ -98,48 +75,52 @@ export async function login(req, res, next) {
 
     if (!parsed.success) {
       return res.status(400).json({
-        message: "Invalid login details",
+        message: "Invalid login details."
       });
     }
-
-    const { email, password } = parsed.data;
 
     const user = await User.findOne({
-      email: email.toLowerCase(),
+      email: parsed.data.email.toLowerCase()
     }).select("+password");
 
-    if (!user) {
+    if (!user || !user.isActive) {
       return res.status(401).json({
-        message: "Invalid email or password",
+        message: "Invalid email or password."
       });
     }
 
-    const passwordMatches = await bcrypt.compare(
-      password,
+    if (typeof user.password !== "string" || !user.password) {
+      console.error("Password missing for user:", user._id);
+
+      return res.status(500).json({
+        message: "Account credentials are not configured correctly."
+      });
+    }
+
+    const isPasswordCorrect = await bcrypt.compare(
+      parsed.data.password,
       user.password
     );
 
-    if (!passwordMatches) {
+    if (!isPasswordCorrect) {
       return res.status(401).json({
-        message: "Invalid email or password",
+        message: "Invalid email or password."
       });
     }
 
-    const token = createToken(user);
+    const token = issueToken(user);
 
     return res.status(200).json({
       message: "Login successful",
       token,
-      expiresIn: "1h",
-      user: publicUser(user),
+      user: publicUser(user)
     });
   } catch (error) {
     next(error);
   }
 }
 
+
 export function getMe(req, res) {
-  return res.status(200).json({
-    user: req.user,
-  });
+  return res.json({ user: req.user });
 }

@@ -5,6 +5,8 @@ import LandingPage from "./pages/LandingPage.jsx";
 import Login from "./pages/Login.jsx";
 import Register from "./pages/register.jsx";
 // import Dashboard from "./pages/Dashboard.jsx";
+import StudentPage from "./pages/StudentPage.jsx";
+import StaffPage from "./pages/StaffPage";
 
 import "./App.css";
 
@@ -14,9 +16,12 @@ function App() {
       <Route path="/" element={<LandingPage />} />
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
-      {/* <Route path="/dashboard" element={<Dashboard />} /> */}
+       {/* <Route path="/dashboard" element={<Dashboard />} />  */}
 
       <Route path="*" element={<Navigate to="/" replace />} />
+      <Route path="/student" element={<StudentPage />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+      <Route path="/staff" element={<StaffPage />} />
     </Routes>
   );
 }
