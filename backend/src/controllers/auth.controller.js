@@ -27,34 +27,99 @@ function issueToken(user) {
   });
 }
 
+
 export async function register(req, res, next) {
   try {
     const parsed = registerSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ message: "Invalid registration details", errors: parsed.error.issues });
-    const { name, password } = parsed.data;
+
+    if (!parsed.success) {
+      return res.status(400).json({
+        message: "Invalid registration details",
+        errors: parsed.error.issues
+      });
+    }
+
+    const { name } = parsed.data;
     const email = parsed.data.email.toLowerCase();
-    const passwordHash = await bcrypt.hash(password, 12);
-    const user = await User.create({ name, email, passwordHash, role: Role.STUDENT });
-    return res.status(201).json({ message: "Registration successful", user: publicUser(user) });
+
+    // Hash the original password
+    const passwordHash = await bcrypt.hash(parsed.data.password, 12);
+
+    // Store the hash under the MongoDB field "password"
+    const user = await User.create({
+      name,
+      email,
+      password: passwordHash,
+      role: Role.STUDENT
+    });
+
+    return res.status(201).json({
+      message: "Registration successful",
+      user: publicUser(user)
+    });
   } catch (error) {
-    if (error.code === 11000) return res.status(409).json({ message: "An account with this email already exists." });
+    if (error.code === 11000) {
+      return res.status(409).json({
+        message: "An account with this email already exists."
+      });
+    }
+
     next(error);
   }
 }
 
+
 export async function login(req, res, next) {
   try {
     const parsed = loginSchema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ message: "Invalid login details." });
-    const user = await User.findOne({ email: parsed.data.email.toLowerCase() }).select("+passwordHash");
-    if (!user || !user.isActive || !(await bcrypt.compare(parsed.data.password, user.passwordHash))) {
-      return res.status(401).json({ message: "Invalid email or password." });
+
+    if (!parsed.success) {
+      return res.status(400).json({
+        message: "Invalid login details."
+      });
     }
-    return res.status(200).json({ message: "Login successful", token: issueToken(user), expiresIn: "1h", user: publicUser(user) });
+
+    const user = await User.findOne({
+      email: parsed.data.email.toLowerCase()
+    }).select("+password");
+
+    if (!user || !user.isActive) {
+      return res.status(401).json({
+        message: "Invalid email or password."
+      });
+    }
+
+    if (typeof user.password !== "string" || !user.password) {
+      console.error("Password missing for user:", user._id);
+
+      return res.status(500).json({
+        message: "Account credentials are not configured correctly."
+      });
+    }
+
+    const isPasswordCorrect = await bcrypt.compare(
+      parsed.data.password,
+      user.password
+    );
+
+    if (!isPasswordCorrect) {
+      return res.status(401).json({
+        message: "Invalid email or password."
+      });
+    }
+
+    const token = issueToken(user);
+
+    return res.status(200).json({
+      message: "Login successful",
+      token,
+      user: publicUser(user)
+    });
   } catch (error) {
     next(error);
   }
 }
+
 
 export function getMe(req, res) {
   return res.json({ user: req.user });
