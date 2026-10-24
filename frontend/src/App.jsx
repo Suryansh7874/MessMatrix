@@ -7,6 +7,7 @@ import Register from "./pages/register.jsx";
 import StudentPage from "./pages/StudentPage.jsx";
 import StaffPage from "./pages/StaffPage.jsx";
 import MessAdmin from "./pages/MessAdmin.jsx";
+import ProtectedRoute from "./components/ProtectedRoute.jsx";
 
 import "./App.css";
 
@@ -17,9 +18,32 @@ function App() {
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
 
-      <Route path="/student" element={<StudentPage />} />
-      <Route path="/staff" element={<StaffPage />} />
-      <Route path="/mess-admin" element={<MessAdmin />} />
+      <Route
+        path="/student"
+        element={
+          <ProtectedRoute allowedRole="STUDENT">
+            <StudentPage />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/staff"
+        element={
+          <ProtectedRoute allowedRole="MESS_STAFF">
+            <StaffPage />
+          </ProtectedRoute>
+        }
+      />
+
+      <Route
+        path="/mess-admin"
+        element={
+          <ProtectedRoute allowedRole="MESS_ADMIN">
+            <MessAdmin />
+          </ProtectedRoute>
+        }
+      />
 
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

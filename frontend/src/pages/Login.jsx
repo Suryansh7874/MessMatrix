@@ -813,7 +813,15 @@ export default function Login() {
       otherStorage.removeItem("user");
 
       // App.jsx currently has no dashboard route, so return to the landing page.
-      navigate("/", { replace: true });
+      const dashboardPaths = {
+  STUDENT: "/student",
+  MESS_STAFF: "/staff",
+  MESS_ADMIN: "/mess-admin",
+};
+
+const destination = dashboardPaths[user?.role] || "/";
+
+navigate(destination, { replace: true });
     } catch (err) {
       setMessage(
         err.response?.data?.message ||

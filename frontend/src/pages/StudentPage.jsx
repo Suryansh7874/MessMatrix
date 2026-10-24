@@ -1,1186 +1,1421 @@
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import api from "../services/api";
+
+const MEAL_DETAILS = {
+  BREAKFAST: {
+    name: "Breakfast",
+    icon: "☀️",
+    description: "A nourishing beginning to your day.",
+  },
+  LUNCH: {
+    name: "Lunch",
+    icon: "🍱",
+    description: "Restore your energy for the day ahead.",
+  },
+  DINNER: {
+    name: "Dinner",
+    icon: "🍲",
+    description: "Gather and unwind at day's end.",
+  },
+};
+
+const NAV_ITEMS = [
+  { label: "Overview", icon: "⌂" },
+  { label: "My Bookings", icon: "▤" },
+  { label: "Today's Menu", icon: "♨" },
+  { label: "My Activity", icon: "◷" },
+];
+
+function getSlotId(booking) {
+  const value = booking?.mealSlotId;
+  return typeof value === "object" ? value?._id : value;
+}
+
+function formatTime(value) {
+  if (!value) return "Time unavailable";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Time unavailable";
+
+  return date.toLocaleTimeString("en-IN", {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function formatDate(value) {
+  if (!value) return "Date unavailable";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Date unavailable";
+
+  return date.toLocaleDateString("en-IN", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function errorMessage(error, fallback) {
+  return error?.response?.data?.message || fallback;
+}
 
 export default function StudentPage() {
   const [activeTab, setActiveTab] = useState("Overview");
-  const [selectedMeal, setSelectedMeal] = useState("Lunch");
+  const [selectedMeal, setSelectedMeal] = useState("");
+  const [mealSlots, setMealSlots] = useState([]);
   const [bookings, setBookings] = useState([]);
   const [notice, setNotice] = useState("");
+  const [noticeType, setNoticeType] = useState("info");
   const [clock, setClock] = useState(new Date());
-  const [glow, setGlow] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [busySlotId, setBusySlotId] = useState("");
 
   useEffect(() => {
-    const timer = setInterval(() => setClock(new Date()), 1000);
-    return () => clearInterval(timer);
+    const timer = window.setInterval(
+      () => setClock(new Date()),
+      30000
+    );
+
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const loadStudentData = useCallback(async () => {
+    setLoading(true);
+    setNotice("");
+
+    try {
+      const [slotsResponse, bookingsResponse] = await Promise.all([
+        api.get("/meal-slots"),
+        api.get("/bookings/my"),
+      ]);
+
+      setMealSlots(slotsResponse.data?.mealSlots ?? []);
+      setBookings(bookingsResponse.data?.bookings ?? []);
+    } catch (error) {
+      setNoticeType("error");
+      setNotice(
+        errorMessage(
+          error,
+          "Could not load meal slots and bookings. Check that the backend is running and try again."
+        )
+      );
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
-    if (!notice) return;
-    const timer = setTimeout(() => setNotice(""), 3000);
-    return () => clearTimeout(timer);
-  }, [notice]);
+    loadStudentData();
+  }, [loadStudentData]);
 
-  const meals = [
-    {
-      name: "Breakfast",
-      time: "7:30 AM – 9:00 AM",
-      icon: "☀️",
-      description: "A nourishing beginning to your day.",
-      color: "#e6bd78",
-      menu: "Morning Harvest",
+  const refreshBookings = useCallback(async () => {
+    const response = await api.get("/bookings/my");
+    setBookings(response.data?.bookings ?? []);
+  }, []);
+
+  const meals = useMemo(() => {
+    return mealSlots
+      .filter((slot) => MEAL_DETAILS[slot.mealType])
+      .map((slot) => {
+        const details = MEAL_DETAILS[slot.mealType];
+
+        const booking = bookings.find(
+          (item) => getSlotId(item) === slot._id
+        );
+
+        const cutoffPassed =
+          !slot.cutoffTime ||
+          clock >= new Date(slot.cutoffTime);
+
+        const isBooked = booking?.status === "OPTED_IN";
+
+        const canBook =
+          slot.status === "OPEN" &&
+          !slot.bookingLocked &&
+          !cutoffPassed &&
+          new Date(slot.endTime) > clock;
+
+        return {
+          ...details,
+          id: slot._id,
+          slot,
+          booking,
+          menu: slot.menuId?.name || details.name,
+          menuDescription:
+            slot.menuId?.description || details.description,
+          price: slot.menuId?.price,
+          time: `${formatTime(slot.startTime)} – ${formatTime(
+            slot.endTime
+          )}`,
+          date: formatDate(slot.date || slot.startTime),
+          isBooked,
+          canBook,
+        };
+      })
+      .sort(
+        (a, b) =>
+          new Date(a.slot.startTime) -
+          new Date(b.slot.startTime)
+      );
+  }, [mealSlots, bookings, clock]);
+
+  const activeBookings = useMemo(
+    () =>
+      bookings.filter(
+        (booking) => booking.status === "OPTED_IN"
+      ),
+    [bookings]
+  );
+
+  const getMealForBooking = useCallback(
+    (booking) => {
+      const slotId = getSlotId(booking);
+
+      const fromSlots = mealSlots.find(
+        (item) => item._id === slotId
+      );
+
+      const populatedSlot =
+        typeof booking.mealSlotId === "object"
+          ? booking.mealSlotId
+          : null;
+
+      const slot = fromSlots || populatedSlot;
+
+      if (!slot) return null;
+
+      const details = MEAL_DETAILS[slot.mealType];
+      if (!details) return null;
+
+      return {
+        ...details,
+        id: slot._id || slotId,
+        menu: slot.menuId?.name || details.name,
+        time: `${formatTime(slot.startTime)} – ${formatTime(
+          slot.endTime
+        )}`,
+        date: formatDate(slot.date || slot.startTime),
+      };
     },
-    {
-      name: "Lunch",
-      time: "12:30 PM – 2:00 PM",
-      icon: "🍱",
-      description: "Restore your energy for the day ahead.",
-      color: "#d9b875",
-      menu: "Midday Feast",
-    },
-    {
-      name: "Snacks",
-      time: "4:30 PM – 5:30 PM",
-      icon: "🥪",
-      description: "A little offering for the afternoon.",
-      color: "#c9a6e8",
-      menu: "Afternoon Bites",
-    },
-    {
-      name: "Dinner",
-      time: "7:30 PM – 9:00 PM",
-      icon: "🍲",
-      description: "Gather and unwind at day's end.",
-      color: "#a5d1a2",
-      menu: "Evening Supper",
-    },
-  ];
+    [mealSlots]
+  );
 
-  const today = clock.toLocaleDateString("en-IN", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-  });
+  async function bookMeal(meal) {
+    if (!meal?.id || busySlotId) return;
 
-  const navItems = [
-    { name: "Overview", icon: "⌂" },
-    { name: "My Bookings", icon: "▤" },
-    { name: "Today's Menu", icon: "☷" },
-    { name: "My Activity", icon: "✧" },
-  ];
-
-  const getMeal = (name) => meals.find((meal) => meal.name === name);
-
-  function changeTab(name) {
-    setActiveTab(name);
-    setNotice("");
-  }
-
-  function bookMeal(name) {
-    if (bookings.includes(name)) {
-      setNotice(`${name} is already reserved.`);
+    if (!meal.canBook) {
+      setNoticeType("error");
+      setNotice("Booking is closed for this meal slot.");
       return;
     }
 
-    setBookings((previous) => [...previous, name]);
-    setSelectedMeal(name);
-    setGlow(true);
-    setNotice(`✧ ${name} has been reserved successfully!`);
-    setTimeout(() => setGlow(false), 900);
+    setBusySlotId(meal.id);
+    setNotice("");
+
+    try {
+      await api.put(
+        `/bookings/${encodeURIComponent(meal.id)}`,
+        { status: "OPTED_IN" }
+      );
+
+      await refreshBookings();
+
+      setSelectedMeal(meal.id);
+      setNoticeType("success");
+      setNotice(`${meal.name} reserved successfully.`);
+    } catch (error) {
+      setNoticeType("error");
+      setNotice(
+        errorMessage(
+          error,
+          "Could not reserve this meal. Please try again."
+        )
+      );
+    } finally {
+      setBusySlotId("");
+    }
   }
 
-  function cancelMeal(name) {
-    setBookings((previous) => previous.filter((meal) => meal !== name));
-    setNotice(`${name} reservation cancelled.`);
+  async function cancelMeal(booking) {
+    const slotId = getSlotId(booking);
+
+    if (!slotId || busySlotId) return;
+
+    setBusySlotId(slotId);
+    setNotice("");
+
+    try {
+      await api.put(
+        `/bookings/${encodeURIComponent(slotId)}`,
+        { status: "CANCELLED" }
+      );
+
+      await refreshBookings();
+
+      setNoticeType("success");
+      setNotice("Your reservation has been cancelled.");
+    } catch (error) {
+      setNoticeType("error");
+      setNotice(
+        errorMessage(
+          error,
+          "Could not cancel this reservation. Please try again."
+        )
+      );
+    } finally {
+      setBusySlotId("");
+    }
+  }
+
+  const availableCount = meals.filter(
+    (meal) => !meal.isBooked && meal.canBook
+  ).length;
+
+  function MealCard({ meal }) {
+    return (
+      <article
+        className={`mm-meal-card ${
+          selectedMeal === meal.id ? "is-selected" : ""
+        }`}
+      >
+        <div className="mm-meal-topline">
+          <span className="mm-meal-icon" aria-hidden="true">
+            {meal.icon}
+          </span>
+
+          <span
+            className={`mm-pill ${
+              meal.isBooked
+                ? "pill-booked"
+                : meal.canBook
+                  ? "pill-open"
+                  : "pill-closed"
+            }`}
+          >
+            {meal.isBooked
+              ? "Reserved"
+              : meal.canBook
+                ? "Booking open"
+                : "Closed"}
+          </span>
+        </div>
+
+        <p className="mm-eyebrow">{meal.name}</p>
+        <h3>{meal.menu}</h3>
+        <p className="mm-meal-description">
+          {meal.menuDescription}
+        </p>
+
+        <div className="mm-meal-meta">
+          <span>◷ {meal.time}</span>
+          <span>▦ {meal.date}</span>
+        </div>
+
+        {meal.price !== undefined && meal.price !== null && (
+          <p className="mm-price">
+            Price: ₹
+            {typeof meal.price === "object"
+              ? meal.price.$numberDecimal ?? "—"
+              : meal.price}
+          </p>
+        )}
+
+        <button
+          className={`mm-primary-button ${
+            meal.isBooked ? "button-muted" : ""
+          }`}
+          type="button"
+          disabled={
+            !meal.canBook ||
+            meal.isBooked ||
+            busySlotId === meal.id
+          }
+          onClick={() => bookMeal(meal)}
+        >
+          {busySlotId === meal.id
+            ? "Please wait…"
+            : meal.isBooked
+              ? "✓ Reserved"
+              : meal.canBook
+                ? "Reserve meal"
+                : "Booking closed"}
+        </button>
+      </article>
+    );
+  }
+
+  function BookingRow({ booking, activity = false }) {
+    const meal = getMealForBooking(booking);
+
+    if (!meal) return null;
+
+    return (
+      <div className="mm-booking-row" key={booking._id}>
+        <div className="mm-booking-left">
+          <div className="mm-booking-emoji">{meal.icon}</div>
+
+          <div>
+            <strong>
+              {meal.name} — {meal.menu}
+            </strong>
+            <small>
+              {meal.date} · {meal.time}
+            </small>
+          </div>
+        </div>
+
+        {activity ? (
+          <span className="mm-status">Booked</span>
+        ) : (
+          <button
+            className="mm-cancel-button"
+            type="button"
+            disabled={busySlotId === meal.id}
+            onClick={() => cancelMeal(booking)}
+          >
+            {busySlotId === meal.id
+              ? "Please wait…"
+              : "Cancel"}
+          </button>
+        )}
+      </div>
+    );
   }
 
   return (
-    <div className="mm-student">
+    <div className="mm-page">
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700&family=IM+Fell+English:ital@0;1&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap');
 
-        .mm-student, .mm-student * { box-sizing: border-box; }
+        * {
+          box-sizing: border-box;
+        }
 
-        .mm-student {
-          --gold: #d9b875;
-          --gold-light: #f0dba7;
-          --text: #f0e6d0;
-          --muted: #b7ad98;
+        .mm-page {
           min-height: 100vh;
-          display: flex;
-          isolation: isolate;
-          position: relative;
-          overflow: hidden;
-          color: var(--text);
-          font-family: 'DM Sans', sans-serif;
           background:
-            radial-gradient(ellipse at 75% 0%, rgba(171,126,55,.17), transparent 35%),
-            radial-gradient(ellipse at 8% 70%, rgba(73,104,74,.13), transparent 35%),
-            linear-gradient(135deg, #171914, #211e17 50%, #171a15);
+            radial-gradient(ellipse at 72% 0%, rgba(161,119,52,.17), transparent 36%),
+            #111a19;
+          color: #f4ead4;
+          font-family: Manrope, sans-serif;
+          padding: 24px;
         }
 
-        .mm-student button { font-family: 'DM Sans', sans-serif; }
-        .mm-student button:focus-visible {
-          outline: 2px solid var(--gold-light);
-          outline-offset: 3px;
+        .mm-shell {
+          width: min(1420px, 100%);
+          margin: 0 auto;
+          display: grid;
+          grid-template-columns: 245px minmax(0, 1fr);
+          gap: 22px;
         }
 
-        /* Ambient magic */
-        .mm-student .mm-atmosphere {
-          position: fixed;
-          inset: 0;
-          overflow: hidden;
-          z-index: -1;
-          pointer-events: none;
-        }
-
-        .mm-student .mm-orb {
-          position: absolute;
-          border-radius: 50%;
-          filter: blur(75px);
-          animation: mmOrbFloat 13s ease-in-out infinite alternate;
-        }
-
-        .mm-student .mm-orb-one {
-          width: 320px;
-          height: 320px;
-          right: -100px;
-          top: -100px;
-          background: rgba(207,161,80,.17);
-        }
-
-        .mm-student .mm-orb-two {
-          width: 250px;
-          height: 250px;
-          left: 35%;
-          bottom: -130px;
-          background: rgba(96,131,82,.14);
-          animation-delay: -5s;
-        }
-
-        .mm-student .mm-orb-three {
-          width: 180px;
-          height: 180px;
-          left: 15%;
-          top: 35%;
-          background: rgba(180,132,64,.07);
-          animation-delay: -8s;
-        }
-
-        .mm-student .mm-particle {
-          position: absolute;
-          bottom: -20px;
-          width: 4px;
-          height: 4px;
-          border-radius: 50%;
-          background: #f0dba7;
-          box-shadow: 0 0 12px 3px rgba(217,184,117,.35);
-          animation: mmRise linear infinite;
-          opacity: 0;
-        }
-
-        .mm-student .mm-particle:nth-child(4) { left: 8%; animation-duration: 13s; animation-delay: -4s; }
-        .mm-student .mm-particle:nth-child(5) { left: 21%; animation-duration: 17s; animation-delay: -9s; }
-        .mm-student .mm-particle:nth-child(6) { left: 36%; animation-duration: 12s; animation-delay: -2s; }
-        .mm-student .mm-particle:nth-child(7) { left: 49%; animation-duration: 19s; animation-delay: -13s; }
-        .mm-student .mm-particle:nth-child(8) { left: 63%; animation-duration: 14s; animation-delay: -7s; }
-        .mm-student .mm-particle:nth-child(9) { left: 77%; animation-duration: 16s; animation-delay: -3s; }
-        .mm-student .mm-particle:nth-child(10) { left: 91%; animation-duration: 12s; animation-delay: -10s; }
-
-        @keyframes mmRise {
-          0% { transform: translateY(0) scale(.5); opacity: 0; }
-          12% { opacity: .8; }
-          80% { opacity: .55; }
-          100% { transform: translateY(-110vh) translateX(30px) scale(1.2); opacity: 0; }
-        }
-
-        @keyframes mmOrbFloat {
-          from { transform: translate(0,0) scale(1); }
-          to { transform: translate(-35px,28px) scale(1.14); }
-        }
-
-        @keyframes mmAppear {
-          from { opacity: 0; transform: translateY(13px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-
-        @keyframes mmFloat {
-          0%, 100% { transform: translateY(0) rotate(-2deg); }
-          50% { transform: translateY(-8px) rotate(2deg); }
-        }
-
-        @keyframes mmSpin {
-          to { transform: rotate(360deg); }
-        }
-
-        @keyframes mmShimmer {
-          0% { background-position: -200% center; }
-          100% { background-position: 200% center; }
-        }
-
-        @keyframes mmPulse {
-          0%, 100% { box-shadow: 0 0 0 0 rgba(217,184,117,.05); }
-          50% { box-shadow: 0 0 30px 3px rgba(217,184,117,.15); }
-        }
-
-        @keyframes mmSuccess {
-          0% { transform: scale(1); }
-          40% { transform: scale(1.025); }
-          100% { transform: scale(1); }
-        }
-
-        .mm-student .mm-sidebar {
-          width: 248px;
-          flex: 0 0 248px;
-          min-height: 100vh;
+        .mm-sidebar {
+          background: linear-gradient(165deg, #202d29, #131c1b 70%);
+          border: 1px solid rgba(209,174,103,.28);
+          border-radius: 22px;
+          padding: 24px 16px;
+          min-height: calc(100vh - 48px);
           display: flex;
           flex-direction: column;
-          padding: 26px 17px 20px;
-          background: linear-gradient(180deg, rgba(37,37,29,.97), rgba(27,30,24,.98));
-          border-right: 1px solid rgba(217,184,117,.22);
-          position: relative;
-          z-index: 2;
-          backdrop-filter: blur(16px);
+          box-shadow: 0 20px 60px #0003;
         }
 
-        .mm-student .mm-brand {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          padding: 0 7px 28px;
+        .mm-brand {
+          padding: 6px 10px 28px;
+          border-bottom: 1px solid rgba(215,180,109,.2);
         }
 
-        .mm-student .mm-brand-mark {
+        .mm-brand-mark {
           width: 43px;
           height: 43px;
-          flex: 0 0 43px;
+          border: 1px solid #b99758;
+          border-radius: 50%;
           display: grid;
           place-items: center;
-          border-radius: 14px;
-          color: #2c261a;
-          font-size: 25px;
-          background: linear-gradient(145deg, #f1dda9, #b38a49);
-          box-shadow: 0 0 22px rgba(217,184,117,.16);
-          animation: mmPulse 4s ease-in-out infinite;
-        }
-
-        .mm-student .mm-brand h2 {
-          margin: 0;
-          font: 700 17px 'Cinzel', serif;
-          color: var(--gold-light);
-        }
-
-        .mm-student .mm-brand p {
-          margin: 5px 0 0;
-          color: #a99a7c;
-          font-size: 9px;
-          letter-spacing: 1.4px;
-          text-transform: uppercase;
-        }
-
-        .mm-student .mm-nav-label {
-          padding: 0 12px;
+          color: #e8c982;
+          font-size: 22px;
           margin-bottom: 12px;
-          color: #95876d;
+          background: #b9975812;
+        }
+
+        .mm-brand-name {
+          font-family: Cinzel, serif;
+          font-size: 20px;
+          letter-spacing: .04em;
+          color: #f2d69a;
+        }
+
+        .mm-brand-sub {
+          font-size: 9px;
+          letter-spacing: .18em;
+          color: #b6a681;
+          margin-top: 5px;
+        }
+
+        .mm-nav-label {
+          margin: 25px 10px 10px;
+          color: #9f9b86;
           font-size: 10px;
-          letter-spacing: 1.8px;
-          font-weight: 700;
+          font-weight: 800;
+          letter-spacing: .18em;
         }
 
-        .mm-student .mm-nav { display: grid; gap: 7px; }
+        .mm-nav {
+          display: grid;
+          gap: 7px;
+        }
 
-        .mm-student .mm-nav button {
-          display: flex;
-          align-items: center;
-          gap: 13px;
-          width: 100%;
-          padding: 13px 12px;
+        .mm-nav button {
           border: 1px solid transparent;
-          border-radius: 12px;
           background: transparent;
-          color: #bbb29f;
-          font-size: 12px;
-          font-weight: 500;
+          color: #c7c3b4;
           text-align: left;
+          padding: 12px 13px;
+          border-radius: 12px;
+          display: flex;
+          gap: 12px;
+          align-items: center;
+          font: 600 13px Manrope, sans-serif;
           cursor: pointer;
-          transition: background .25s, color .25s, border-color .25s, transform .25s;
+          transition: .2s;
+          width: 100%;
         }
 
-        .mm-student .mm-nav button:hover {
-          color: #f1dfb7;
-          background: rgba(217,184,117,.08);
-          border-color: rgba(217,184,117,.16);
-          transform: translateX(3px);
+        .mm-nav button:hover {
+          background: #ffffff09;
+          color: #fff0ca;
         }
 
-        .mm-student .mm-nav button.active {
-          color: #f1dba5;
-          background: linear-gradient(100deg, rgba(192,151,78,.2), rgba(192,151,78,.045));
-          border-color: rgba(217,184,117,.25);
-          box-shadow: inset 3px 0 var(--gold), 0 0 20px rgba(217,184,117,.04);
+        .mm-nav button.active {
+          color: #f3d99e;
+          background: linear-gradient(90deg, #b48b4328, #b48b430a);
+          border-color: #b48b4355;
         }
 
-        .mm-student .mm-nav-icon {
-          width: 23px;
+        .mm-nav-icon {
+          width: 22px;
           text-align: center;
-          color: var(--gold);
           font-size: 19px;
         }
 
-        .mm-student .mm-sidebar-bottom {
+        .mm-sidebar-note {
           margin-top: auto;
-          padding: 18px;
-          border: 1px solid rgba(217,184,117,.22);
-          border-radius: 15px;
-          background: radial-gradient(circle at 100% 0, rgba(217,184,117,.12), transparent 65%), #25271f;
+          padding: 20px 14px 8px;
+          color: #a9a38f;
+          font-size: 12px;
+          line-height: 1.8;
         }
 
-        .mm-student .mm-sidebar-bottom span {
-          color: var(--gold-light);
-          font: 600 10px 'Cinzel', serif;
-          letter-spacing: .8px;
+        .mm-sidebar-note strong {
+          display: block;
+          color: #e0c58b;
+          font-family: Cinzel, serif;
+          font-size: 15px;
+          line-height: 1.6;
+          margin-bottom: 8px;
         }
 
-        .mm-student .mm-sidebar-bottom p {
-          margin: 10px 0 0;
-          color: #c0b59d;
-          font: italic 14px/1.7 'IM Fell English', serif;
-        }
-
-        .mm-student .mm-main {
-          flex: 1;
+        .mm-main {
           min-width: 0;
-          padding: 28px clamp(18px, 3.5vw, 44px) 32px;
-          position: relative;
-          z-index: 1;
         }
 
-        .mm-student .mm-topbar {
+        .mm-header {
           display: flex;
-          align-items: center;
           justify-content: space-between;
-          gap: 15px;
-          margin-bottom: 34px;
-        }
-
-        .mm-student .mm-breadcrumb { color: #a89d88; font-size: 12px; }
-        .mm-student .mm-breadcrumb strong { color: #e7d4aa; font-weight: 600; }
-
-        .mm-student .mm-profile {
-          display: flex;
           align-items: center;
-          gap: 10px;
-          padding: 6px 13px 6px 6px;
-          border: 1px solid rgba(217,184,117,.22);
-          border-radius: 30px;
-          background: rgba(41,40,30,.8);
-          transition: border-color .25s, box-shadow .25s;
-        }
-
-        .mm-student .mm-profile:hover {
-          border-color: rgba(217,184,117,.55);
-          box-shadow: 0 0 20px rgba(217,184,117,.07);
-        }
-
-        .mm-student .mm-avatar {
-          width: 36px;
-          height: 36px;
-          display: grid;
-          place-items: center;
-          border-radius: 50%;
-          background: linear-gradient(145deg, #f0dba7, #b88c49);
-          color: #302719;
-          font: 700 16px 'Cinzel', serif;
-        }
-
-        .mm-student .mm-profile strong { display: block; color: #f1e4c9; font-size: 12px; }
-        .mm-student .mm-profile small { display: block; margin-top: 3px; color: #a99d86; font-size: 10px; }
-
-        .mm-student .mm-heading {
-          margin-bottom: 25px;
-          animation: mmAppear .5s ease both;
-        }
-
-        .mm-student .mm-eyebrow {
-          color: var(--gold);
-          font: 600 10px 'Cinzel', serif;
-          letter-spacing: 2px;
-        }
-
-        .mm-student .mm-heading h1 {
-          margin: 12px 0 8px;
-          color: #f0e5ce;
-          font: 600 clamp(27px, 3.3vw, 39px)/1.25 'Cinzel', serif;
-          overflow-wrap: anywhere;
-        }
-
-        .mm-student .mm-heading h1 span { color: var(--gold); }
-
-        .mm-student .mm-heading p {
-          margin: 0;
-          color: #b8ad98;
-          font: 15px/1.8 'IM Fell English', serif;
-        }
-
-        .mm-student .mm-hero {
-          position: relative;
-          overflow: hidden;
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
           gap: 20px;
-          margin-bottom: 23px;
-          padding: clamp(22px, 3vw, 30px);
-          border: 1px solid rgba(217,184,117,.3);
-          border-radius: 19px;
-          background: radial-gradient(ellipse at 90% 0%, rgba(190,146,67,.18), transparent 45%), linear-gradient(120deg, #333025, #24291f);
-          box-shadow: 0 12px 32px rgba(0,0,0,.14);
-          animation: mmAppear .55s .08s ease both;
-          transition: border-color .3s, box-shadow .3s;
+          padding: 9px 4px 24px;
         }
 
-        .mm-student .mm-hero:hover {
-          border-color: rgba(217,184,117,.55);
-          box-shadow: 0 15px 40px rgba(0,0,0,.2), 0 0 25px rgba(217,184,117,.04);
-        }
-
-        .mm-student .mm-hero::after {
-          content: "✧";
-          position: absolute;
-          right: 145px;
-          top: -65px;
-          color: rgba(217,184,117,.09);
-          font-size: 205px;
-          pointer-events: none;
-          animation: mmSpin 70s linear infinite;
-        }
-
-        .mm-student .mm-hero-copy { position: relative; z-index: 1; min-width: 0; }
-        .mm-student .mm-date { margin-bottom: 12px; color: #d9bf86; font-size: 11px; letter-spacing: .7px; }
-
-        .mm-student .mm-hero h2 {
-          margin: 0 0 9px;
-          color: #f0e1c1;
-          font: 600 21px 'Cinzel', serif;
-        }
-
-        .mm-student .mm-hero p {
-          max-width: 490px;
-          margin: 0 0 19px;
-          color: #c4b9a2;
-          font: 15px/1.8 'IM Fell English', serif;
-        }
-
-        .mm-student .mm-hero-art {
-          flex: 0 0 108px;
-          width: 108px;
-          height: 108px;
-          display: grid;
-          place-items: center;
-          border: 1px solid rgba(217,184,117,.4);
-          outline: 1px solid rgba(217,184,117,.14);
-          outline-offset: 6px;
-          border-radius: 50%;
-          background: radial-gradient(circle, rgba(217,184,117,.2), rgba(35,38,29,.65));
-          font-size: 46px;
-          animation: mmFloat 4s ease-in-out infinite;
-          box-shadow: 0 0 35px rgba(217,184,117,.09);
-        }
-
-        .mm-student .mm-primary,
-        .mm-student .mm-secondary {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          gap: 7px;
-          min-height: 39px;
-          padding: 10px 15px;
-          border-radius: 10px;
+        .mm-breadcrumb {
+          color: #b6a989;
           font-size: 11px;
-          font-weight: 700;
-          cursor: pointer;
-          transition: background .2s, transform .2s, border-color .2s, box-shadow .2s;
+          letter-spacing: .06em;
+          margin-bottom: 12px;
         }
 
-        .mm-student .mm-primary {
-          color: #2b2519;
-          background: linear-gradient(110deg, #f0dca9, #c49b59, #f0dca9);
-          background-size: 200% auto;
-          border: 1px solid #e4c88d;
-          box-shadow: 0 4px 16px rgba(190,146,67,.1);
+        .mm-header h1 {
+          font: 600 clamp(27px, 3.2vw, 43px) Cinzel, serif;
+          letter-spacing: -.025em;
+          color: #f6e8ca;
+          margin: 0;
         }
 
-        .mm-student .mm-primary:hover {
-          background-position: right center;
-          transform: translateY(-2px);
-          box-shadow: 0 7px 22px rgba(190,146,67,.2);
+        .mm-header p {
+          color: #b7b4a5;
+          font-size: 13px;
+          line-height: 1.8;
+          margin: 11px 0 0;
+          max-width: 620px;
         }
 
-        .mm-student .mm-secondary {
-          color: #e7d09e;
-          background: rgba(217,184,117,.055);
-          border: 1px solid rgba(217,184,117,.29);
-        }
-
-        .mm-student .mm-secondary:hover {
-          background: rgba(217,184,117,.13);
-          border-color: rgba(217,184,117,.5);
-          transform: translateY(-1px);
-        }
-
-        .mm-student .mm-section-head {
+        .mm-profile {
+          flex-shrink: 0;
           display: flex;
           align-items: center;
+          gap: 11px;
+          padding: 10px 14px;
+          border: 1px solid #c9a65b40;
+          border-radius: 16px;
+          background: #ffffff06;
+        }
+
+        .mm-avatar {
+          display: grid;
+          place-items: center;
+          width: 38px;
+          height: 38px;
+          border-radius: 50%;
+          background: #b48b4326;
+          border: 1px solid #d4b36a;
+          color: #f0d38f;
+          font-family: Cinzel, serif;
+          font-size: 17px;
+        }
+
+        .mm-profile strong {
+          display: block;
+          font-size: 12px;
+        }
+
+        .mm-profile small {
+          color: #a8a28e;
+          font-size: 10px;
+          display: block;
+          margin-top: 4px;
+        }
+
+        .mm-notice {
+          margin: 0 0 18px;
+          padding: 13px 16px;
+          border: 1px solid #bfa25d44;
+          border-radius: 12px;
+          background: #c7a45e12;
+          color: #ead8ad;
+          font-size: 12px;
+          line-height: 1.6;
+        }
+
+        .mm-notice.error {
+          border-color: #d97d6b66;
+          background: #b8413018;
+          color: #ffd1c7;
+        }
+
+        .mm-notice.success {
+          border-color: #87b88a66;
+          background: #3b81451a;
+          color: #c8f0c7;
+        }
+
+        .mm-section-heading {
+          display: flex;
           justify-content: space-between;
+          align-items: end;
           gap: 12px;
-          margin: 28px 0 15px;
+          margin: 24px 0 14px;
         }
 
-        .mm-student .mm-section-head h2 {
+        .mm-section-heading h2 {
+          font: 600 21px Cinzel, serif;
+          color: #f0dfbd;
           margin: 0;
-          color: #eee1c5;
-          font: 600 16px 'Cinzel', serif;
         }
 
-        .mm-student .mm-section-head p {
-          margin: 6px 0 0;
-          color: #ac9f88;
-          font: 14px/1.6 'IM Fell English', serif;
+        .mm-section-heading p {
+          font-size: 11px;
+          color: #a9a592;
+          margin: 7px 0 0;
         }
 
-        .mm-student .mm-stats {
+        .mm-text-link {
+          border: 0;
+          background: none;
+          color: #dfbd77;
+          font: 700 11px Manrope, sans-serif;
+          cursor: pointer;
+        }
+
+        .mm-stats {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 13px;
+        }
+
+        .mm-stat {
+          padding: 19px;
+          border: 1px solid #d0ae6633;
+          border-radius: 16px;
+          background: linear-gradient(140deg, #ffffff08, #ffffff02);
+        }
+
+        .mm-stat-label {
+          color: #a9a38f;
+          font-size: 11px;
+        }
+
+        .mm-stat-value {
+          font: 600 29px Cinzel, serif;
+          color: #f1d395;
+          margin-top: 10px;
+        }
+
+        .mm-stat-caption {
+          font-size: 10px;
+          color: #929989;
+          margin-top: 5px;
+        }
+
+        .mm-meal-grid {
           display: grid;
           grid-template-columns: repeat(3, minmax(0, 1fr));
           gap: 14px;
-          animation: mmAppear .5s .14s ease both;
         }
 
-        .mm-student .mm-stat,
-        .mm-student .mm-panel,
-        .mm-student .mm-meal {
+        .mm-meal-card {
           min-width: 0;
-          border: 1px solid rgba(217,184,117,.19);
-          border-radius: 16px;
-          background: linear-gradient(145deg, rgba(48,46,35,.92), rgba(31,35,28,.95));
-          box-shadow: 0 9px 25px rgba(0,0,0,.11);
-          transition: border-color .25s, background .25s, transform .25s, box-shadow .25s;
-          backdrop-filter: blur(8px);
+          padding: 19px;
+          border: 1px solid #d0ae6630;
+          border-radius: 17px;
+          background: linear-gradient(150deg, #26332e, #1b2522);
+          transition: transform .2s, border-color .2s, box-shadow .2s;
         }
 
-        .mm-student .mm-stat:hover,
-        .mm-student .mm-panel:hover,
-        .mm-student .mm-meal:hover {
-          border-color: rgba(217,184,117,.45);
+        .mm-meal-card:hover {
           transform: translateY(-3px);
-          box-shadow: 0 14px 30px rgba(0,0,0,.17), 0 0 18px rgba(217,184,117,.035);
+          border-color: #c4a35b88;
+          box-shadow: 0 12px 32px #0002;
         }
 
-        .mm-student .mm-stat { padding: 19px; }
-        .mm-student .mm-stat-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-        .mm-student .mm-stat-label { color: #c1b59e; font-size: 11px; }
-
-        .mm-student .mm-stat-icon {
-          width: 36px;
-          height: 36px;
-          flex: 0 0 36px;
-          display: grid;
-          place-items: center;
-          border: 1px solid rgba(217,184,117,.17);
-          border-radius: 11px;
-          background: rgba(217,184,117,.07);
-          font-size: 17px;
-          transition: transform .3s, background .3s;
+        .mm-meal-card.is-selected {
+          border-color: #d4b36a;
+          box-shadow: 0 0 0 1px #d4b36a22;
         }
 
-        .mm-student .mm-stat:hover .mm-stat-icon { transform: rotate(-8deg) scale(1.08); background: rgba(217,184,117,.14); }
-
-        .mm-student .mm-stat h3 {
-          margin: 14px 0 5px;
-          color: #f0dca9;
-          font: 600 27px 'Cinzel', serif;
-          animation: mmAppear .45s ease both;
+        .mm-meal-topline {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 8px;
+          margin-bottom: 17px;
         }
 
-        .mm-student .mm-stat p { margin: 0; color: #a99d87; font: 13px/1.6 'IM Fell English', serif; }
-
-        .mm-student .mm-meals {
-          display: grid;
-          grid-template-columns: repeat(4, minmax(0, 1fr));
-          gap: 13px;
-        }
-
-        .mm-student .mm-meal {
-          position: relative;
-          overflow: hidden;
-          padding: 18px;
-          animation: mmAppear .45s ease both;
-        }
-
-        .mm-student .mm-meal::before {
-          content: "";
-          position: absolute;
-          width: 110px;
-          height: 110px;
-          top: -65px;
-          right: -65px;
-          border-radius: 50%;
-          background: rgba(217,184,117,.07);
-          transition: transform .4s, background .4s;
-          pointer-events: none;
-        }
-
-        .mm-student .mm-meal:hover::before { transform: scale(1.8); background: rgba(217,184,117,.1); }
-
-        .mm-student .mm-meal.selected {
-          border-color: rgba(217,184,117,.48);
-          background: linear-gradient(145deg, rgba(91,72,39,.35), rgba(31,35,28,.96));
-        }
-
-        .mm-student .mm-meal-icon {
+        .mm-meal-icon {
           width: 43px;
           height: 43px;
           display: grid;
           place-items: center;
-          margin-bottom: 15px;
-          border: 1px solid rgba(217,184,117,.2);
-          border-radius: 12px;
-          background: rgba(217,184,117,.065);
-          font-size: 23px;
-          transition: transform .3s, box-shadow .3s;
+          border-radius: 13px;
+          background: #d0ac5a16;
+          border: 1px solid #d0ac5a3b;
+          font-size: 21px;
         }
 
-        .mm-student .mm-meal:hover .mm-meal-icon {
-          transform: translateY(-3px) rotate(-5deg);
-          box-shadow: 0 5px 17px rgba(217,184,117,.1);
+        .mm-pill {
+          border-radius: 30px;
+          padding: 6px 8px;
+          font-size: 9px;
+          font-weight: 800;
+          white-space: nowrap;
         }
 
-        .mm-student .mm-meal h3 { margin: 0 0 7px; color: #eee1c4; font: 600 13px 'Cinzel', serif; }
-        .mm-student .mm-meal p { min-height: 40px; margin: 0 0 12px; color: #b5a991; font: 13px/1.6 'IM Fell English', serif; }
-        .mm-student .mm-meal time { display: block; margin-bottom: 14px; color: #d7bd84; font-size: 10px; }
+        .pill-open {
+          color: #c9e2b5;
+          background: #85a96820;
+        }
 
-        .mm-student .mm-meal button {
-          width: 100%;
-          min-height: 37px;
-          padding: 9px 7px;
-          border: 1px solid rgba(217,184,117,.3);
-          border-radius: 9px;
-          background: rgba(217,184,117,.06);
-          color: #e8d19e;
+        .pill-booked {
+          color: #f0d38e;
+          background: #c49b3d20;
+        }
+
+        .pill-closed {
+          color: #c0b9a7;
+          background: #ffffff0c;
+        }
+
+        .mm-eyebrow {
+          color: #c5a763;
           font-size: 10px;
-          font-weight: 700;
-          cursor: pointer;
-          transition: background .2s, transform .2s, border-color .2s;
+          letter-spacing: .14em;
+          text-transform: uppercase;
+          margin: 0 0 6px;
         }
 
-        .mm-student .mm-meal button:hover:not(:disabled) {
-          background: rgba(217,184,117,.16);
-          border-color: rgba(217,184,117,.65);
+        .mm-meal-card h3 {
+          font: 600 18px Cinzel, serif;
+          color: #f0dfbd;
+          margin: 0 0 9px;
+          overflow-wrap: anywhere;
+        }
+
+        .mm-meal-description {
+          color: #aaa998;
+          font-size: 11px;
+          line-height: 1.7;
+          min-height: 38px;
+          margin: 0 0 15px;
+        }
+
+        .mm-meal-meta {
+          display: grid;
+          gap: 8px;
+          padding: 13px 0;
+          border-top: 1px solid #ffffff10;
+          color: #c6c1af;
+          font-size: 10px;
+        }
+
+        .mm-price {
+          color: #e0c58b;
+          font-size: 11px;
+          margin: 0 0 12px;
+        }
+
+        .mm-primary-button {
+          border: 1px solid #c9a65b;
+          background: linear-gradient(135deg, #d5b36c, #b28b43);
+          color: #1b211d;
+          border-radius: 10px;
+          padding: 11px 12px;
+          font: 800 11px Manrope, sans-serif;
+          cursor: pointer;
+          width: 100%;
+          transition: .2s;
+        }
+
+        .mm-primary-button:hover:not(:disabled) {
+          filter: brightness(1.08);
           transform: translateY(-1px);
         }
 
-        .mm-student .mm-meal button:disabled {
-          color: #b8c8a9;
-          background: rgba(104,131,85,.1);
-          border-color: rgba(149,179,130,.22);
+        .mm-primary-button:disabled {
+          opacity: .58;
+          cursor: not-allowed;
         }
 
-        .mm-student .mm-lower-grid {
-          display: grid;
-          grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
-          gap: 15px;
-          margin-top: 24px;
-          animation: mmAppear .45s ease both;
+        .mm-primary-button.button-muted {
+          background: #ffffff0a;
+          color: #d9c99f;
+          border-color: #d0ae6633;
         }
 
-        .mm-student .mm-panel { padding: 21px; }
-        .mm-student .mm-panel h3 { margin: 0; color: #eee1c5; font: 600 15px 'Cinzel', serif; }
-        .mm-student .mm-subtitle { margin: 7px 0 15px; color: #ad9f87; font: 14px/1.7 'IM Fell English', serif; }
+        .mm-empty {
+          grid-column: 1 / -1;
+          padding: 28px 20px;
+          border: 1px dashed #c9a65b45;
+          border-radius: 15px;
+          text-align: center;
+          color: #aaa794;
+          font-size: 12px;
+          line-height: 1.8;
+        }
 
-        .mm-student .mm-booking-row {
+        .mm-list-panel {
+          border: 1px solid #d0ae6630;
+          border-radius: 16px;
+          background: #202b27;
+          padding: 5px 18px;
+        }
+
+        .mm-booking-row {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 14px;
+          padding: 16px 0;
+          border-bottom: 1px solid #ffffff10;
+        }
+
+        .mm-booking-row:last-child {
+          border-bottom: 0;
+        }
+
+        .mm-booking-left {
           display: flex;
           align-items: center;
-          justify-content: space-between;
-          gap: 10px;
-          padding: 12px 0;
-          border-bottom: 1px solid rgba(217,184,117,.12);
-          animation: mmAppear .3s ease both;
+          gap: 12px;
+          min-width: 0;
         }
 
-        .mm-student .mm-booking-row:last-child { border-bottom: 0; padding-bottom: 0; }
-        .mm-student .mm-booking-left { display: flex; align-items: center; gap: 11px; min-width: 0; }
-
-        .mm-student .mm-booking-emoji {
-          width: 38px;
-          height: 38px;
-          flex: 0 0 38px;
+        .mm-booking-emoji {
+          width: 42px;
+          height: 42px;
+          flex-shrink: 0;
           display: grid;
           place-items: center;
-          border: 1px solid rgba(217,184,117,.18);
-          border-radius: 11px;
-          background: rgba(217,184,117,.06);
-          font-size: 19px;
-        }
-
-        .mm-student .mm-booking-left strong { display: block; color: #e9dec6; font-size: 12px; }
-        .mm-student .mm-booking-left small { display: block; margin-top: 5px; color: #ab9f88; font-size: 10px; }
-        .mm-student .mm-status { flex-shrink: 0; color: #d8bd83; font-size: 10px; }
-
-        .mm-student .mm-cancel {
-          flex-shrink: 0;
-          padding: 8px 10px;
-          border: 1px solid rgba(204,125,94,.3);
-          border-radius: 8px;
-          background: rgba(204,125,94,.06);
-          color: #e4aa91;
-          font-size: 10px;
-          cursor: pointer;
-          transition: background .2s;
-        }
-
-        .mm-student .mm-cancel:hover { background: rgba(204,125,94,.15); }
-        .mm-student .mm-empty { padding: 23px 6px; color: #b5a991; text-align: center; font: 14px/1.8 'IM Fell English', serif; }
-
-        .mm-student .mm-points-card {
-          padding: 20px;
-          border: 1px solid rgba(217,184,117,.28);
-          border-radius: 13px;
-          background: radial-gradient(circle at 100% 0, rgba(217,184,117,.13), transparent 55%), linear-gradient(135deg, #403927, #292d23);
-          transition: border-color .3s, box-shadow .3s;
-        }
-
-        .mm-student .mm-points-card:hover {
-          border-color: rgba(217,184,117,.5);
-          box-shadow: 0 0 22px rgba(217,184,117,.06);
-        }
-
-        .mm-student .mm-points-card span { color: #dfc68e; font: 600 10px 'Cinzel', serif; letter-spacing: .7px; }
-        .mm-student .mm-points-card h2 { margin: 12px 0 6px; color: #f0dba7; font: 600 32px 'Cinzel', serif; }
-        .mm-student .mm-points-card p { margin: 0; color: #c7b99d; font: 14px/1.7 'IM Fell English', serif; }
-        .mm-student .mm-note { margin: 13px 0 0; color: #a99d87; font: 12px/1.8 'IM Fell English', serif; }
-
-        .mm-student .mm-footer {
-          margin-top: 29px;
-          color: #9d927b;
-          font: italic 13px 'IM Fell English', serif;
-          text-align: center;
-        }
-
-        .mm-student .mm-notice {
-          position: fixed;
-          z-index: 10;
-          right: 22px;
-          bottom: 22px;
-          max-width: calc(100vw - 36px);
-          padding: 14px 19px;
-          border: 1px solid #e2c78d;
+          background: #d0ac5a16;
+          border: 1px solid #d0ac5a30;
           border-radius: 12px;
-          background: linear-gradient(110deg, #f0dfb7, #dfc58d);
-          color: #302819;
-          box-shadow: 0 8px 30px rgba(0,0,0,.35), 0 0 22px rgba(217,184,117,.13);
-          font-size: 12px;
-          font-weight: 700;
-          animation: mmAppear .25s ease both;
+          font-size: 20px;
         }
 
-        .mm-student .mm-celebrate { animation: mmSuccess .45s ease; }
+        .mm-booking-left strong {
+          display: block;
+          color: #e9dfc7;
+          font-size: 12px;
+          overflow-wrap: anywhere;
+        }
 
-        @media (max-width: 1100px) {
-          .mm-student .mm-sidebar { width: 220px; flex-basis: 220px; }
-          .mm-student .mm-meals { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .mm-booking-left small {
+          display: block;
+          color: #a9a592;
+          font-size: 10px;
+          margin-top: 6px;
+        }
+
+        .mm-cancel-button {
+          border: 1px solid #b66f5b66;
+          background: #8e3d3022;
+          color: #ffc4b4;
+          padding: 8px 12px;
+          border-radius: 9px;
+          font: 700 10px Manrope, sans-serif;
+          cursor: pointer;
+          flex-shrink: 0;
+        }
+
+        .mm-cancel-button:disabled {
+          opacity: .5;
+          cursor: not-allowed;
+        }
+
+        .mm-status {
+          color: #c9e2b5;
+          background: #85a96820;
+          padding: 7px 10px;
+          border-radius: 20px;
+          font-size: 10px;
+          font-weight: 800;
+          white-space: nowrap;
+        }
+
+        .mm-footer {
+          text-align: center;
+          color: #777f72;
+          font-size: 10px;
+          padding: 30px 0 5px;
+        }
+
+        @media (max-width: 1050px) {
+          .mm-shell {
+            grid-template-columns: 210px minmax(0, 1fr);
+          }
+
+          .mm-meal-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+
+          .mm-page {
+            padding: 16px;
+          }
         }
 
         @media (max-width: 760px) {
-          .mm-student { display: block; }
-          .mm-student .mm-sidebar {
-            width: 100%;
-            min-height: auto;
-            padding: 16px 14px;
-            border-right: 0;
-            border-bottom: 1px solid rgba(217,184,117,.22);
+          .mm-shell {
+            grid-template-columns: 1fr;
           }
-          .mm-student .mm-brand { padding-bottom: 16px; }
-          .mm-student .mm-nav-label, .mm-student .mm-sidebar-bottom { display: none; }
-          .mm-student .mm-nav { display: flex; overflow-x: auto; gap: 6px; padding-bottom: 3px; }
-          .mm-student .mm-nav button { width: auto; flex-shrink: 0; white-space: nowrap; padding: 10px 12px; }
-          .mm-student .mm-main { padding: 21px 16px 30px; }
-          .mm-student .mm-topbar { margin-bottom: 27px; }
-          .mm-student .mm-stats { grid-template-columns: 1fr; }
-          .mm-student .mm-stat { padding: 15px 17px; }
-          .mm-student .mm-stat h3 { margin: 9px 0 4px; }
-          .mm-student .mm-lower-grid { grid-template-columns: 1fr; }
+
+          .mm-sidebar {
+            min-height: 0;
+            padding: 15px;
+          }
+
+          .mm-brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 2px 4px 14px;
+          }
+
+          .mm-brand-mark {
+            margin: 0;
+            flex-shrink: 0;
+          }
+
+          .mm-brand-sub {
+            font-size: 8px;
+          }
+
+          .mm-nav-label,
+          .mm-sidebar-note {
+            display: none;
+          }
+
+          .mm-nav {
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            margin-top: 13px;
+          }
+
+          .mm-nav button {
+            justify-content: center;
+            flex-direction: column;
+            gap: 5px;
+            padding: 9px 4px;
+            font-size: 9px;
+          }
+
+          .mm-nav-icon {
+            font-size: 17px;
+          }
+
+          .mm-header {
+            align-items: flex-start;
+          }
+
+          .mm-profile {
+            padding: 8px;
+          }
+
+          .mm-profile small {
+            display: none;
+          }
+
+          .mm-stats {
+            gap: 8px;
+          }
+
+          .mm-stat {
+            padding: 13px;
+          }
+
+          .mm-stat-value {
+            font-size: 23px;
+          }
+
+          .mm-section-heading h2 {
+            font-size: 18px;
+          }
         }
 
-        @media (max-width: 430px) {
-          .mm-student .mm-profile { gap: 7px; padding-right: 8px; }
-          .mm-student .mm-profile small { display: none; }
-          .mm-student .mm-hero-art { display: none; }
-          .mm-student .mm-meals { grid-template-columns: 1fr; }
-          .mm-student .mm-meal { padding: 17px; }
-          .mm-student .mm-panel { padding: 16px; }
-          .mm-student .mm-section-head { align-items: flex-start; }
-          .mm-student .mm-notice { right: 12px; bottom: 12px; }
-        }
+        @media (max-width: 520px) {
+          .mm-page {
+            padding: 10px;
+          }
 
-        @media (prefers-reduced-motion: reduce) {
-          .mm-student *, .mm-student *::before, .mm-student *::after {
-            animation: none !important;
-            transition: none !important;
-            scroll-behavior: auto !important;
+          .mm-shell {
+            gap: 13px;
+          }
+
+          .mm-header {
+            display: block;
+            padding: 8px 3px 18px;
+          }
+
+          .mm-profile {
+            display: none;
+          }
+
+          .mm-header h1 {
+            font-size: 28px;
+          }
+
+          .mm-header p {
+            font-size: 12px;
+          }
+
+          .mm-meal-grid {
+            grid-template-columns: 1fr;
+          }
+
+          .mm-stats {
+            grid-template-columns: 1fr 1fr;
+          }
+
+          .mm-stat {
+            padding: 13px;
+          }
+
+          .mm-stat:last-child {
+            grid-column: 1 / -1;
+          }
+
+          .mm-booking-row {
+            align-items: flex-start;
+          }
+
+          .mm-booking-left {
+            gap: 9px;
+          }
+
+          .mm-booking-left strong {
+            font-size: 11px;
+          }
+
+          .mm-cancel-button {
+            padding: 7px 9px;
           }
         }
       `}</style>
 
-      <div className="mm-atmosphere" aria-hidden="true">
-        <div className="mm-orb mm-orb-one" />
-        <div className="mm-orb mm-orb-two" />
-        <div className="mm-orb mm-orb-three" />
-        {Array.from({ length: 7 }, (_, index) => (
-          <div className="mm-particle" key={index} />
-        ))}
-      </div>
-
-      <aside className="mm-sidebar">
-        <div className="mm-brand">
-          <div className="mm-brand-mark">✳</div>
-          <div>
-            <h2>MessMatrix</h2>
-            <p>Refectory of Kamar-Taj</p>
-          </div>
-        </div>
-
-        <div className="mm-nav-label">STUDENT PORTAL</div>
-
-        <nav className="mm-nav">
-          {navItems.map((item) => (
-            <button
-              key={item.name}
-              className={activeTab === item.name ? "active" : ""}
-              onClick={() => changeTab(item.name)}
-            >
-              <span className="mm-nav-icon">{item.icon}</span>
-              {item.name}
-            </button>
-          ))}
-        </nav>
-
-        <div className="mm-sidebar-bottom">
-          <span>✧ THE WAY OF BALANCE</span>
-          <p>
-            Nourish the body, honour every harvest, and leave no
-            offering wasted.
-          </p>
-        </div>
-      </aside>
-
-      <main className="mm-main">
-        <header className="mm-topbar">
-          <div className="mm-breadcrumb">
-            MessMatrix / <strong>{activeTab}</strong>
-          </div>
-
-          <div className="mm-profile">
-            <div className="mm-avatar">S</div>
+      <div className="mm-shell">
+        <aside className="mm-sidebar">
+          <div className="mm-brand">
+            <div className="mm-brand-mark">✧</div>
             <div>
-              <strong>Student</strong>
-              <small>{clock.toLocaleTimeString("en-IN", {
-                hour: "2-digit",
-                minute: "2-digit",
-                second: "2-digit",
-              })}</small>
+              <div className="mm-brand-name">MessMatrix</div>
+              <div className="mm-brand-sub">
+                KAMAR-TAJ REFECTORY
+              </div>
             </div>
           </div>
-        </header>
 
-        <section className="mm-heading" key={activeTab}>
-          <div className="mm-eyebrow">✧ YOUR PLACE AT THE TABLE ✧</div>
-          <h1>
-            {activeTab === "Overview" ? (
-              <>A feast for <span>the soul.</span></>
-            ) : (
-              <>{activeTab}<span>.</span></>
-            )}
-          </h1>
-          <p>
-            Within these ancient halls, every meal has a purpose.
-            Plan your day and dine with intention.
-          </p>
-        </section>
+          <div className="mm-nav-label">STUDENT SPACE</div>
 
-        {activeTab === "Overview" && (
-          <>
-            <section className={`mm-hero ${glow ? "mm-celebrate" : ""}`}>
-              <div className="mm-hero-copy">
-                <div className="mm-date">✧ {today} ✧</div>
-                <h2>Welcome to the Refectory.</h2>
-                <p>
-                  The day's offerings await. Reserve your meals in
-                  advance and help the kitchen prepare thoughtfully.
-                </p>
-                <button
-                  className="mm-primary"
-                  onClick={() => changeTab("Today's Menu")}
-                >
-                  Explore today's menu <span>→</span>
-                </button>
-              </div>
-              <div className="mm-hero-art">🍜</div>
-            </section>
-
-            <section className="mm-stats">
-              <div className="mm-stat">
-                <div className="mm-stat-top">
-                  <span className="mm-stat-label">Today's reservations</span>
-                  <span className="mm-stat-icon">▤</span>
-                </div>
-                <h3>{bookings.length}</h3>
-                <p>Meals reserved for today</p>
-              </div>
-
-              <div className="mm-stat">
-                <div className="mm-stat-top">
-                  <span className="mm-stat-label">Available meal types</span>
-                  <span className="mm-stat-icon">🍽️</span>
-                </div>
-                <h3>{meals.length - bookings.length}</h3>
-                <p>Meal types not yet reserved</p>
-              </div>
-
-              <div className="mm-stat">
-                <div className="mm-stat-top">
-                  <span className="mm-stat-label">Refectory points</span>
-                  <span className="mm-stat-icon">✧</span>
-                </div>
-                <h3>120</h3>
-                <p>Illustrative demo balance</p>
-              </div>
-            </section>
-
-            <div className="mm-section-head">
-              <div>
-                <h2>Today's offerings</h2>
-                <p>Choose the meals you wish to reserve.</p>
-              </div>
+          <nav
+            className="mm-nav"
+            aria-label="Student navigation"
+          >
+            {NAV_ITEMS.map((item) => (
               <button
-                className="mm-secondary"
-                onClick={() => changeTab("Today's Menu")}
+                key={item.label}
+                type="button"
+                className={
+                  activeTab === item.label ? "active" : ""
+                }
+                onClick={() => setActiveTab(item.label)}
               >
-                View all →
+                <span
+                  className="mm-nav-icon"
+                  aria-hidden="true"
+                >
+                  {item.icon}
+                </span>
+                <span>{item.label}</span>
+              </button>
+            ))}
+          </nav>
+
+          <div className="mm-sidebar-note">
+            <strong>
+              Good Food
+              <br />
+              Builds a Better Tomorrow
+            </strong>
+            Thoughtfully planned meals make campus life a
+            little easier.
+          </div>
+        </aside>
+
+        <main className="mm-main">
+          <header className="mm-header">
+            <div>
+              <div className="mm-breadcrumb">
+                MessMatrix / {activeTab}
+              </div>
+
+              <h1>
+                {activeTab === "Overview"
+                  ? "Good food. Better days."
+                  : activeTab}
+              </h1>
+
+              <p>
+                {activeTab === "Overview"
+                  ? "Your dining space, simplified. View upcoming meals, manage bookings, and make every meal count."
+                  : activeTab === "My Bookings"
+                    ? "Review your active meal reservations and cancel before the booking cutoff."
+                    : activeTab === "Today's Menu"
+                      ? "Explore available meal slots and reserve your place at the Refectory."
+                      : "A record of the meal reservations currently linked to your account."}
+              </p>
+            </div>
+
+            <div className="mm-profile">
+              <div className="mm-avatar">S</div>
+              <div>
+                <strong>Student</strong>
+                <small>Campus resident</small>
+              </div>
+            </div>
+          </header>
+
+          {notice && (
+            <div
+              className={`mm-notice ${noticeType}`}
+              role="status"
+            >
+              {notice}
+
+              <button
+                type="button"
+                aria-label="Dismiss notification"
+                onClick={() => setNotice("")}
+                style={{
+                  float: "right",
+                  border: 0,
+                  background: "transparent",
+                  color: "inherit",
+                  cursor: "pointer",
+                  fontSize: 16,
+                }}
+              >
+                ×
               </button>
             </div>
+          )}
 
-            <section className="mm-meals">
-              {meals.map((meal, index) => (
-                <article
-                  key={meal.name}
-                  style={{ animationDelay: `${index * 90}ms` }}
-                  className={`mm-meal ${selectedMeal === meal.name ? "selected" : ""}`}
-                >
-                  <div className="mm-meal-icon" style={{ color: meal.color }}>
-                    {meal.icon}
+          {activeTab === "Overview" && (
+            <>
+              <section
+                className="mm-stats"
+                aria-label="Booking summary"
+              >
+                <div className="mm-stat">
+                  <div className="mm-stat-label">
+                    Active reservations
                   </div>
-                  <h3>{meal.name}</h3>
-                  <p>{meal.description}</p>
-                  <time>{meal.time}</time>
-                  <button
-                    disabled={bookings.includes(meal.name)}
-                    onClick={() => bookMeal(meal.name)}
-                  >
-                    {bookings.includes(meal.name) ? "✓ Reserved" : "Reserve meal"}
-                  </button>
-                </article>
-              ))}
-            </section>
-          </>
-        )}
-
-        {activeTab === "Today's Menu" && (
-          <>
-            <div className="mm-section-head">
-              <div>
-                <h2>The daily menu</h2>
-                <p>
-                  Sample meal slots and timings. Actual dishes can be
-                  connected to mess data later.
-                </p>
-              </div>
-            </div>
-
-            <section className="mm-meals">
-              {meals.map((meal, index) => (
-                <article
-                  key={meal.name}
-                  style={{ animationDelay: `${index * 90}ms` }}
-                  className={`mm-meal ${selectedMeal === meal.name ? "selected" : ""}`}
-                >
-                  <div className="mm-meal-icon" style={{ color: meal.color }}>
-                    {meal.icon}
+                  <div className="mm-stat-value">
+                    {activeBookings.length}
                   </div>
-                  <h3>{meal.name}</h3>
-                  <p>{meal.description}</p>
-                  <time>{meal.time}</time>
+                  <div className="mm-stat-caption">
+                    Meals currently opted in
+                  </div>
+                </div>
+
+                <div className="mm-stat">
+                  <div className="mm-stat-label">
+                    Slots available
+                  </div>
+                  <div className="mm-stat-value">
+                    {availableCount}
+                  </div>
+                  <div className="mm-stat-caption">
+                    Open for booking right now
+                  </div>
+                </div>
+
+                <div className="mm-stat">
+                  <div className="mm-stat-label">
+                    Upcoming meal slots
+                  </div>
+                  <div className="mm-stat-value">
+                    {meals.length}
+                  </div>
+                  <div className="mm-stat-caption">
+                    Provided by the Refectory
+                  </div>
+                </div>
+              </section>
+
+              <section>
+                <div className="mm-section-heading">
+                  <div>
+                    <h2>Available meal slots</h2>
+                    <p>Choose a meal slot to reserve it.</p>
+                  </div>
+
                   <button
-                    disabled={bookings.includes(meal.name)}
-                    onClick={() => bookMeal(meal.name)}
+                    className="mm-text-link"
+                    type="button"
+                    onClick={() =>
+                      setActiveTab("Today's Menu")
+                    }
                   >
-                    {bookings.includes(meal.name) ? "✓ Reserved" : "Reserve meal"}
+                    View menu →
                   </button>
-                </article>
-              ))}
-            </section>
-          </>
-        )}
+                </div>
 
-        {activeTab === "My Bookings" && (
-          <section className="mm-panel">
-            <h3>Your reservations</h3>
-            <p className="mm-subtitle">
-              Your place at the table, thoughtfully arranged.
-            </p>
+                {loading ? (
+                  <div className="mm-empty">
+                    Opening the Refectory records…
+                  </div>
+                ) : meals.length === 0 ? (
+                  <div className="mm-empty">
+                    No upcoming meal slots are available yet.
+                    Please check again later.
+                  </div>
+                ) : (
+                  <div className="mm-meal-grid">
+                    {meals
+                      .slice(0, 3)
+                      .map((meal) => (
+                        <MealCard
+                          key={meal.id}
+                          meal={meal}
+                        />
+                      ))}
+                  </div>
+                )}
+              </section>
 
-            {bookings.length === 0 ? (
-              <div className="mm-empty">
-                <div style={{ fontSize: 30 }}>🍽️</div>
-                No reservations yet. Visit Today's Menu to reserve a meal.
-              </div>
-            ) : (
-              bookings.map((name) => {
-                const meal = getMeal(name);
-                return (
-                  <div className="mm-booking-row" key={name}>
-                    <div className="mm-booking-left">
-                      <div className="mm-booking-emoji">{meal.icon}</div>
-                      <div>
-                        <strong>{name}</strong>
-                        <small>{meal.time}</small>
-                      </div>
+              <section>
+                <div className="mm-section-heading">
+                  <div>
+                    <h2>Your upcoming reservations</h2>
+                    <p>
+                      Bookings confirmed by the server.
+                    </p>
+                  </div>
+
+                  <button
+                    className="mm-text-link"
+                    type="button"
+                    onClick={() =>
+                      setActiveTab("My Bookings")
+                    }
+                  >
+                    All bookings →
+                  </button>
+                </div>
+
+                <div className="mm-list-panel">
+                  {loading ? (
+                    <div className="mm-empty">
+                      Loading reservations…
                     </div>
-                    <button
-                      className="mm-cancel"
-                      onClick={() => cancelMeal(name)}
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                );
-              })
-            )}
-          </section>
-        )}
+                  ) : activeBookings.length === 0 ? (
+                    <div className="mm-empty">
+                      You have no active reservations yet.
+                    </div>
+                  ) : (
+                    activeBookings
+                      .slice(0, 3)
+                      .map((booking) => (
+                        <BookingRow
+                          key={booking._id}
+                          booking={booking}
+                          activity
+                        />
+                      ))
+                  )}
+                </div>
+              </section>
+            </>
+          )}
 
-        {activeTab === "My Activity" && (
-          <section className="mm-lower-grid">
-            <div className="mm-panel">
-              <h3>Dining chronicles</h3>
-              <p className="mm-subtitle">
-                Reservations recorded during this demo session.
-              </p>
+          {activeTab === "Today's Menu" && (
+            <section>
+              <div className="mm-section-heading">
+                <div>
+                  <h2>Meal schedule</h2>
+                  <p>
+                    Only meal slots created by the mess
+                    administrator appear here.
+                  </p>
+                </div>
 
-              {bookings.length === 0 ? (
+                <button
+                  className="mm-text-link"
+                  type="button"
+                  onClick={loadStudentData}
+                >
+                  Refresh ↻
+                </button>
+              </div>
+
+              {loading ? (
                 <div className="mm-empty">
-                  Your chronicles begin when you reserve your first meal.
+                  Loading meal slots…
+                </div>
+              ) : meals.length === 0 ? (
+                <div className="mm-empty">
+                  No upcoming meal slots are available yet.
                 </div>
               ) : (
-                [...bookings].reverse().map((name) => {
-                  const meal = getMeal(name);
-                  return (
-                    <div className="mm-booking-row" key={name}>
-                      <div className="mm-booking-left">
-                        <div className="mm-booking-emoji">{meal.icon}</div>
-                        <div>
-                          <strong>{name} reserved</strong>
-                          <small>{meal.time}</small>
-                        </div>
-                      </div>
-                      <span className="mm-status">Demo</span>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-
-            <div className="mm-panel">
-              <h3>Your dining points</h3>
-              <p className="mm-subtitle">
-                A preview of the future Refectory reward system.
-              </p>
-
-              <div className="mm-points-card">
-                <span>ILLUSTRATIVE POINT BALANCE</span>
-                <h2>120 ✧</h2>
-                <p>Sample balance, not connected to a real account.</p>
-              </div>
-
-              <p className="mm-note">
-                Actual points and rebate rules must be calculated and
-                verified by the backend.
-              </p>
-            </div>
-          </section>
-        )}
-
-        {activeTab === "Overview" && (
-          <section className="mm-lower-grid">
-            <div className="mm-panel">
-              <h3>Your upcoming meals</h3>
-              <p className="mm-subtitle">
-                The meals you have reserved for today.
-              </p>
-
-              {bookings.length === 0 ? (
-                <div className="mm-empty">
-                  Your table awaits. Reserve a meal to begin.
+                <div className="mm-meal-grid">
+                  {meals.map((meal) => (
+                    <MealCard
+                      key={meal.id}
+                      meal={meal}
+                    />
+                  ))}
                 </div>
-              ) : (
-                bookings.map((name) => {
-                  const meal = getMeal(name);
-                  return (
-                    <div className="mm-booking-row" key={name}>
-                      <div className="mm-booking-left">
-                        <div className="mm-booking-emoji">{meal.icon}</div>
-                        <div>
-                          <strong>{name}</strong>
-                          <small>{meal.time}</small>
-                        </div>
-                      </div>
-                      <span className="mm-status">Reserved</span>
-                    </div>
-                  );
-                })
               )}
-            </div>
+            </section>
+          )}
 
-            <div className="mm-panel">
-              <h3>Honour the harvest.</h3>
-              <p className="mm-subtitle">
-                A mindful meal is a meaningful contribution.
-              </p>
+          {activeTab === "My Bookings" && (
+            <section>
+              <div className="mm-section-heading">
+                <div>
+                  <h2>Active reservations</h2>
+                  <p>
+                    Cancel a reservation only while the
+                    backend still allows changes.
+                  </p>
+                </div>
 
-              <div className="mm-points-card">
-                <span>YOUR DINING PRINCIPLE</span>
-                <h2>🌿</h2>
-                <p>
-                  Reserve responsibly and cancel within the permitted
-                  cutoff to help the kitchen prepare the right quantity.
-                </p>
+                <button
+                  className="mm-text-link"
+                  type="button"
+                  onClick={loadStudentData}
+                >
+                  Refresh ↻
+                </button>
               </div>
 
-              <p className="mm-note">
-                Cutoff times and impact statistics are illustrative
-                until connected to actual mess data.
-              </p>
-            </div>
-          </section>
-        )}
+              <div className="mm-list-panel">
+                {loading ? (
+                  <div className="mm-empty">
+                    Loading reservations…
+                  </div>
+                ) : activeBookings.length === 0 ? (
+                  <div className="mm-empty">
+                    No active reservations. Visit Today's Menu
+                    to book a meal.
+                  </div>
+                ) : (
+                  activeBookings.map((booking) => (
+                    <BookingRow
+                      key={booking._id}
+                      booking={booking}
+                    />
+                  ))
+                )}
+              </div>
+            </section>
+          )}
 
-        <footer className="mm-footer">
-          ✧ MessMatrix · The Kamar-Taj Refectory · Nourish with intention ✧
-        </footer>
-      </main>
+          {activeTab === "My Activity" && (
+            <section>
+              <div className="mm-section-heading">
+                <div>
+                  <h2>Reservation activity</h2>
+                  <p>
+                    This view shows your current active
+                    reservations, not a complete attendance
+                    history.
+                  </p>
+                </div>
 
-      {notice && (
-        <div className="mm-notice" role="status">
-          {notice}
-        </div>
-      )}
+                <button
+                  className="mm-text-link"
+                  type="button"
+                  onClick={loadStudentData}
+                >
+                  Refresh ↻
+                </button>
+              </div>
+
+              <div className="mm-list-panel">
+                {loading ? (
+                  <div className="mm-empty">
+                    Loading activity…
+                  </div>
+                ) : activeBookings.length === 0 ? (
+                  <div className="mm-empty">
+                    No active reservation activity to show yet.
+                  </div>
+                ) : (
+                  activeBookings.map((booking) => (
+                    <BookingRow
+                      key={booking._id}
+                      booking={booking}
+                      activity
+                    />
+                  ))
+                )}
+              </div>
+            </section>
+          )}
+
+          <footer className="mm-footer">
+            MESSMATRIX · KAMAR-TAJ REFECTORY · PLAN
+            THOUGHTFULLY, DINE MINDFULLY
+          </footer>
+        </main>
+      </div>
     </div>
   );
 }
