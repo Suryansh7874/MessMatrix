@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { authenticate, requireRole } from "../middleware/auth.middleware.js";
 import { Role } from "../utils/enums.js";
-import { createStaff } from "../controllers/admin.Controller.js";
+import { createStaff } from "../controllers/admin.controller.js";
 
 const router = Router();
 
@@ -12,7 +12,7 @@ router.get("/test", authenticate, requireRole("MESS_ADMIN"), (req, res) => {
 router.post(
   "/staff",
   authenticate,
-  requireRole(Role.ADMIN),
+  requireRole(Role.MESS_ADMIN),
   createStaff
 );
 export default router;

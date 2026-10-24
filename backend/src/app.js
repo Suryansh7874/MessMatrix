@@ -11,7 +11,7 @@ import { notFound, errorHandler } from "./middleware/error.middleware.js";
 
 const app = express();
 app.use(helmet());
-app.use(cors({ origin: process.env.CLIENT_ORIGIN?.split(",") ?? "http://localhost:5173" }));
+app.use(cors({ origin: process.env.FRONTEND_URL?.split(",") ?? "http://localhost:5173" }));
 app.use(express.json({ limit: "10kb" }));
 app.use("/api", rateLimit({ windowMs: 15 * 60 * 1000, limit: 300, standardHeaders: true, legacyHeaders: false }));
 

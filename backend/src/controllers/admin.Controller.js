@@ -1,17 +1,15 @@
 import bcrypt from "bcryptjs";
-import { randomBytes, createHash } from "node:crypto";
 import { z } from "zod";
-
 import User from "../models/User.js";
 import { Role } from "../utils/enums.js";
-import { sendPasswordResetEmail } from "../utils/email.js";
 
 export async function createStaff(req, res, next) {
   try {
     const schema = z.object({
       name: z.string().trim().min(2).max(80),
       email: z.string().trim().email().max(254),
-      employeeId: z.string().trim().min(1).max(50).optional()
+      employeeId: z.string().trim().min(1).max(50),
+      password: z.string().min(8).max(72)
     });
 
     const parsed = schema.safeParse(req.body);
@@ -23,7 +21,7 @@ export async function createStaff(req, res, next) {
       });
     }
 
-    const { name, employeeId } = parsed.data;
+    const { name, employeeId, password } = parsed.data;
     const email = parsed.data.email.toLowerCase();
 
     const existingUser = await User.findOne({ email });
@@ -34,19 +32,7 @@ export async function createStaff(req, res, next) {
       });
     }
 
-    const rawToken = randomBytes(32).toString("hex");
-
-    // Temporary random password: staff will set their own password.
-    const temporaryPassword = randomBytes(32).toString("hex");
-    const passwordHash = await bcrypt.hash(temporaryPassword, 12);
-
-    const resetPasswordTokenHash = createHash("sha256")
-      .update(rawToken)
-      .digest("hex");
-
-    const resetPasswordExpiresAt = new Date(
-      Date.now() + 10 * 60 * 1000
-    );
+    const passwordHash = await bcrypt.hash(password, 12);
 
     const user = await User.create({
       name,
@@ -54,37 +40,17 @@ export async function createStaff(req, res, next) {
       employeeId,
       password: passwordHash,
       role: Role.MESS_STAFF,
-      isActive: true,
-      resetPasswordTokenHash,
-      resetPasswordExpiresAt
+      isActive: true
     });
 
-    try {
-      const frontendUrl = process.env.FRONTEND_URL;
-
-      if (!frontendUrl) {
-        throw new Error("FRONTEND_URL is not configured.");
-      }
-
-      const resetUrl =
-        `${frontendUrl.replace(/\/$/, "")}/reset-password` +
-        `?token=${encodeURIComponent(rawToken)}`;
-
-      await sendPasswordResetEmail(email, resetUrl);
-    } catch (emailError) {
-      // Avoid creating an account the staff member cannot set up.
-      await User.deleteOne({ _id: user._id });
-      throw emailError;
-    }
-
     return res.status(201).json({
-      message: "Staff account created. A password setup link has been emailed.",
+      message: "Mess staff account created successfully.",
       user: {
         id: user._id,
         name: user.name,
         email: user.email,
-        role: user.role,
-        employeeId: user.employeeId
+        employeeId: user.employeeId,
+        role: user.role
       }
     });
   } catch (error) {
