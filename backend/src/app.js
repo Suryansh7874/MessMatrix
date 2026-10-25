@@ -8,6 +8,9 @@ import mealSlotRoutes from "./routes/mealSlot.routes.js";
 import bookingRoutes from "./routes/booking.routes.js";
 import adminRoutes from "./routes/admin.routes.js";
 import { notFound, errorHandler } from "./middleware/error.middleware.js";
+import attendanceRoutes from "./routes/attendance.routes.js";
+
+
 
 const app = express();
 app.use(helmet());
@@ -23,6 +26,7 @@ app.use("/api/menu", menuRoutes);
 app.use("/api/meal-slots", mealSlotRoutes);
 app.use("/api/bookings", bookingRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/attendance", attendanceRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

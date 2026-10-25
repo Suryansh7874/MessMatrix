@@ -8,7 +8,16 @@ const bookingSchema = new mongoose.Schema({
   mealSlotId: { type: String, ref: "MealSlot", required: true },
   status: { type: String, enum: Object.values(BookingStatus), default: BookingStatus.OPTED_IN, required: true },
   bookedAt: { type: Date, default: Date.now },
-  cancelledAt: { type: Date, default: null }
+  cancelledAt: { type: Date, default: null },
+  checkedInAt: {
+  type: Date,
+  default: null
+},
+checkedInBy: {
+  type: String,
+  ref: "User",
+  default: null
+}
 }, { timestamps: { createdAt: false, updatedAt: "updatedAt" }, versionKey: false });
 
 bookingSchema.index({ studentId: 1, mealSlotId: 1 }, { unique: true });
