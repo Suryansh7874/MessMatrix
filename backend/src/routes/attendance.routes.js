@@ -4,7 +4,8 @@ import {
   getAttendanceSummary,
   updatePreparedPortions,
   recordLeftovers,
-
+  generateMealQrToken,
+  scanMealQr,
 } from "../controllers/attendance.controller.js";
 
 import {
@@ -47,6 +48,22 @@ router.patch(
   authenticate,
   requireRole(...attendanceRoles),
   recordLeftovers
+);
+
+// Student requests a short-lived QR token.
+router.post(
+  "/meal-slots/:mealSlotId/qr-token",
+  authenticate,
+  requireRole(Role.STUDENT),
+  generateMealQrToken
+);
+
+// Staff scans the QR and records attendance.
+router.post(
+  "/meal-slots/:mealSlotId/scan",
+  authenticate,
+  requireRole(...attendanceRoles),
+  scanMealQr
 );
 
 export default router;
