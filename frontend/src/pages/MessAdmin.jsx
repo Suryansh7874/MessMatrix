@@ -1,6 +1,6 @@
 
 import { useEffect, useMemo, useState } from "react";
-
+import api from "../services/api";
 const initialMeals = [
   { id: 1, name: "Breakfast", time: "7:30 AM – 9:00 AM", menu: "Poha, Paratha, Milk", capacity: 250, booked: 184, open: true },
   { id: 2, name: "Lunch", time: "12:30 PM – 2:00 PM", menu: "Dal, Rice, Roti, Sabzi", capacity: 350, booked: 296, open: true },
@@ -1586,7 +1586,7 @@ export default function MessAdmin() {
           <div className="mm-emblem">✧</div>
           <div>
             <div className="mm-brand-name">MessMatrix</div>
-            <div className="mm-brand-sub">The Royal Refectory</div>
+            <div className="mm-brand-sub">KAMAR-TAJ REFECTORY</div>
           </div>
         </div>
 
