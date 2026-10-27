@@ -1,13 +1,30 @@
+
 import { z } from "zod";
+import mongoose from "mongoose";
+
 import Booking from "../models/Booking.js";
 import MealSlot from "../models/MealSlot.js";
+import CheckIn from "../models/CheckIn.js";
+
 import { BookingStatus, SlotStatus } from "../utils/enums.js";
-import jwt from "jsonwebtoken";
-import { randomUUID } from "node:crypto";
+
+import { generateMealQR } from "../services/qr.service.js";
 
 const checkInSchema = z.object({
-  studentId: z.string().trim().min(1)
+  studentId: z.string().trim().min(1),
 });
+
+const portionsSchema = z.object({
+  portions: z.number().int().min(0),
+});
+
+function isValidObjectId(id) {
+  return mongoose.isValidObjectId(id);
+}
+
+// --------------------------------------------------
+// MANUAL CHECK-IN
+// --------------------------------------------------
 
 export async function checkInStudent(req, res, next) {
   try {
@@ -15,74 +32,79 @@ export async function checkInStudent(req, res, next) {
 
     if (!parsed.success) {
       return res.status(400).json({
-        message: "A valid studentId is required."
+        message: "A valid studentId is required.",
       });
     }
 
     const { mealSlotId } = req.params;
     const { studentId } = parsed.data;
-    const now = new Date();
 
+    if (!isValidObjectId(mealSlotId) || !isValidObjectId(studentId)) {
+      return res.status(400).json({
+        message: "Invalid meal slot or student ID.",
+      });
+    }
+
+    const now = new Date();
     const slot = await MealSlot.findById(mealSlotId);
 
     if (!slot) {
       return res.status(404).json({
-        message: "Meal slot not found."
+        message: "Meal slot not found.",
       });
     }
 
     if (slot.status !== SlotStatus.OPEN) {
       return res.status(409).json({
-        message: "This meal slot is not open for attendance."
+        message: "This meal slot is not open for attendance.",
       });
     }
 
-    if (now < slot.startTime || now > slot.endTime) {
+    if (now < slot.startTime || now >= slot.endTime) {
       return res.status(409).json({
-        message: "Check-in is allowed only during the meal serving window."
+        message: "Check-in is allowed only during the meal serving window.",
       });
     }
 
-    // Atomic transition: only one request can change OPTED_IN to CHECKED_IN.
     const booking = await Booking.findOneAndUpdate(
       {
         studentId,
         mealSlotId: slot._id,
-        status: BookingStatus.OPTED_IN
+        status: BookingStatus.OPTED_IN,
       },
       {
         $set: {
           status: BookingStatus.CHECKED_IN,
           checkedInAt: now,
-          checkedInBy: req.user.id
-        }
+          checkedInBy: req.user.id,
+        },
       },
       {
         new: true,
-        runValidators: true
+        runValidators: true,
       }
     );
 
     if (!booking) {
       const existing = await Booking.findOne({
         studentId,
-        mealSlotId: slot._id
+        mealSlotId: slot._id,
       });
 
       if (!existing) {
         return res.status(404).json({
-          message: "No booking exists for this student and meal slot."
+          message: "No booking exists for this student and meal slot.",
         });
       }
 
       if (existing.status === BookingStatus.CHECKED_IN) {
         return res.status(409).json({
-          message: "This student has already been checked in."
+          message: "This student has already been checked in.",
         });
       }
 
       return res.status(409).json({
-        message: `Student is not eligible for check-in. Current booking status: ${existing.status}.`
+        message: `Student is not eligible for check-in. Current booking status: ${existing.status}.`,
       });
     }
 
@@ -94,49 +116,64 @@ export async function checkInStudent(req, res, next) {
         mealSlotId: booking.mealSlotId,
         status: booking.status,
         checkedInAt: booking.checkedInAt,
-        checkedInBy: booking.checkedInBy
-      }
+        checkedInBy: booking.checkedInBy,
+      },
     });
   } catch (error) {
     next(error);
   }
 }
 
+// --------------------------------------------------
+// ATTENDANCE SUMMARY
+// --------------------------------------------------
+
 export async function getAttendanceSummary(req, res, next) {
   try {
     const { mealSlotId } = req.params;
+
+    if (!isValidObjectId(mealSlotId)) {
+      return res.status(400).json({
+        message: "Invalid meal slot ID.",
+      });
+    }
 
     const slot = await MealSlot.findById(mealSlotId);
 
     if (!slot) {
       return res.status(404).json({
-        message: "Meal slot not found."
+        message: "Meal slot not found.",
       });
     }
 
-    const [optedIn, checkedIn, optedOut, cancelled, noShow] =
-      await Promise.all([
-        Booking.countDocuments({
-          mealSlotId: slot._id,
-          status: BookingStatus.OPTED_IN
-        }),
-        Booking.countDocuments({
-          mealSlotId: slot._id,
-          status: BookingStatus.CHECKED_IN
-        }),
-        Booking.countDocuments({
-          mealSlotId: slot._id,
-          status: BookingStatus.OPTED_OUT
-        }),
-        Booking.countDocuments({
-          mealSlotId: slot._id,
-          status: BookingStatus.CANCELLED
-        }),
-        Booking.countDocuments({
-          mealSlotId: slot._id,
-          status: BookingStatus.NO_SHOW
-        })
-      ]);
+    const [
+      optedIn,
+      checkedIn,
+      optedOut,
+      cancelled,
+      noShow,
+    ] = await Promise.all([
+      Booking.countDocuments({
+        mealSlotId: slot._id,
+        status: BookingStatus.OPTED_IN,
+      }),
+      Booking.countDocuments({
+        mealSlotId: slot._id,
+        status: BookingStatus.CHECKED_IN,
+      }),
+      Booking.countDocuments({
+        mealSlotId: slot._id,
+        status: BookingStatus.OPTED_OUT,
+      }),
+      Booking.countDocuments({
+        mealSlotId: slot._id,
+        status: BookingStatus.CANCELLED,
+      }),
+      Booking.countDocuments({
+        mealSlotId: slot._id,
+        status: BookingStatus.NO_SHOW,
+      }),
+    ]);
 
     return res.json({
       mealSlotId: slot._id,
@@ -152,17 +189,17 @@ export async function getAttendanceSummary(req, res, next) {
         optedOut,
         cancelled,
         noShow,
-        totalExpectedAttendees: optedIn + checkedIn
-      }
+        totalExpectedAttendees: optedIn + checkedIn,
+      },
     });
   } catch (error) {
     next(error);
   }
 }
 
-const portionsSchema = z.object({
-  portions: z.number().int().min(0)
-});
+// --------------------------------------------------
+// UPDATE PREPARED PORTIONS
+// --------------------------------------------------
 
 export async function updatePreparedPortions(req, res, next) {
   try {
@@ -170,7 +207,7 @@ export async function updatePreparedPortions(req, res, next) {
 
     if (!parsed.success) {
       return res.status(400).json({
-        message: "portions must be a non-negative integer."
+        message: "portions must be a non-negative integer.",
       });
     }
 
@@ -178,19 +215,18 @@ export async function updatePreparedPortions(req, res, next) {
 
     if (!slot) {
       return res.status(404).json({
-        message: "Meal slot not found."
+        message: "Meal slot not found.",
       });
     }
 
     const preparedPortions = parsed.data.portions;
 
-    // Existing recorded leftovers cannot exceed the new prepared quantity.
     if (
       slot.recordedLeftovers !== null &&
       slot.recordedLeftovers > preparedPortions
     ) {
       return res.status(400).json({
-        message: "Prepared portions cannot be less than recorded leftovers."
+        message: "Prepared portions cannot be less than recorded leftovers.",
       });
     }
 
@@ -201,12 +237,16 @@ export async function updatePreparedPortions(req, res, next) {
       message: "Prepared portions recorded successfully.",
       mealSlotId: slot._id,
       preparedPortions: slot.preparedPortions,
-      recordedLeftovers: slot.recordedLeftovers
+      recordedLeftovers: slot.recordedLeftovers,
     });
   } catch (error) {
     next(error);
   }
 }
+
+// --------------------------------------------------
+// RECORD LEFTOVERS
+// --------------------------------------------------
 
 export async function recordLeftovers(req, res, next) {
   try {
@@ -214,7 +254,7 @@ export async function recordLeftovers(req, res, next) {
 
     if (!parsed.success) {
       return res.status(400).json({
-        message: "portions must be a non-negative integer."
+        message: "portions must be a non-negative integer.",
       });
     }
 
@@ -222,13 +262,13 @@ export async function recordLeftovers(req, res, next) {
 
     if (!slot) {
       return res.status(404).json({
-        message: "Meal slot not found."
+        message: "Meal slot not found.",
       });
     }
 
     if (slot.preparedPortions === null) {
       return res.status(409).json({
-        message: "Record prepared portions before recording leftovers."
+        message: "Record prepared portions before recording leftovers.",
       });
     }
 
@@ -236,7 +276,7 @@ export async function recordLeftovers(req, res, next) {
 
     if (recordedLeftovers > slot.preparedPortions) {
       return res.status(400).json({
-        message: "Leftovers cannot exceed prepared portions."
+        message: "Leftovers cannot exceed prepared portions.",
       });
     }
 
@@ -247,7 +287,10 @@ export async function recordLeftovers(req, res, next) {
       slot.preparedPortions === 0
         ? 0
         : Number(
-            ((recordedLeftovers / slot.preparedPortions) * 100).toFixed(2)
+            (
+              (recordedLeftovers / slot.preparedPortions) *
+              100
+            ).toFixed(2)
           );
 
     return res.json({
@@ -255,190 +298,145 @@ export async function recordLeftovers(req, res, next) {
       mealSlotId: slot._id,
       preparedPortions: slot.preparedPortions,
       recordedLeftovers: slot.recordedLeftovers,
-      wastePercentage
+      wastePercentage,
     });
   } catch (error) {
     next(error);
   }
 }
 
-function getQrSecret() {
-  if (!process.env.JWT_SECRET) {
-    throw new Error("JWT_SECRET is not configured.");
-  }
-
-  return process.env.JWT_SECRET;
-}
-
+// --------------------------------------------------
+// GENERATE STUDENT QR
+// --------------------------------------------------
 
 export async function generateMealQrToken(req, res, next) {
   try {
     const { mealSlotId } = req.params;
 
-    const slot = await MealSlot.findById(mealSlotId);
-
-    if (!slot) {
-      return res.status(404).json({
-        message: "Meal slot not found."
+    if (!isValidObjectId(mealSlotId)) {
+      return res.status(400).json({
+        message: "Invalid meal slot ID.",
       });
     }
 
-    const booking = await Booking.findOne({
+    const result = await generateMealQR({
       studentId: req.user.id,
-      mealSlotId: slot._id,
-      status: BookingStatus.OPTED_IN
+      mealSlotId,
     });
 
-    if (!booking) {
-      return res.status(409).json({
-        message: "An active booking is required to generate a QR code."
+    if (result.status) {
+      return res.status(result.status).json({
+        message: result.message,
       });
     }
 
-    if (
-      slot.status !== SlotStatus.OPEN ||
-      !slot.bookingLocked ||
-      new Date() >= slot.endTime
-    ) {
-      return res.status(409).json({
-        message: "QR code is unavailable for this meal slot."
-      });
-    }
-
-    const token = jwt.sign(
-      {
-        purpose: "meal-checkin",
-        mealSlotId: slot._id,
-        jti: randomUUID()
-      },
-      getQrSecret(),
-      {
-        subject: req.user.id,
-        issuer: "mess-matrix",
-        audience: "meal-checkin",
-        expiresIn: "5m"
-      }
-    );
-
-    return res.json({
-      message: "QR token generated successfully.",
-      token,
-      expiresInSeconds: 300,
-      mealSlotId: slot._id
+    return res.status(200).json({
+      message: result.message,
+      token: result.token,
+      mealSlotId: result.mealSlotId,
+      expiresAt: result.expiresAt,
     });
   } catch (error) {
     next(error);
   }
 }
 
+// --------------------------------------------------
+// SCAN AND VALIDATE STUDENT QR
+// --------------------------------------------------
+
+
 export async function scanMealQr(req, res, next) {
+  if (!isValidObjectId(req.params.mealSlotId)) {
+  return res.status(400).json({
+    message: "Invalid meal slot ID.",
+  });
+}
+  try {
+    const result = await validateAndCheckIn({
+      token: req.body?.token,
+      expectedMealSlotId: req.params.mealSlotId,
+      scannedBy: req.user.id,
+    });
+
+    if (!result.success) {
+      return res.status(result.status || 400).json({
+        message: result.message,
+      });
+    }
+
+    return res.status(200).json({
+      message: result.message,
+      attendance: result.attendance,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// --------------------------------------------------
+// STUDENT ATTENDANCE HISTORY
+// --------------------------------------------------
+
+export async function getMyAttendance(req, res, next) {
+  try {
+    const bookings = await Booking.find({
+      studentId: req.user.id,
+    })
+      .populate("mealSlotId")
+      .sort({ bookedAt: -1 })
+      .lean();
+
+    const attendance = bookings.map((booking) => ({
+      bookingId: booking._id,
+      status: booking.status,
+      mealSlot: booking.mealSlotId,
+      checkedIn: booking.status === BookingStatus.CHECKED_IN,
+    }));
+
+    return res.json({
+      count: attendance.length,
+      attendance,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+// --------------------------------------------------
+// MEAL SLOT ATTENDANCE REPORT
+// --------------------------------------------------
+
+export async function getMealSlotAttendance(req, res, next) {
   try {
     const { mealSlotId } = req.params;
-    const { token } = req.body;
 
-    if (typeof token !== "string" || token.length === 0 || token.length > 4096) {
+    if (!isValidObjectId(mealSlotId)) {
       return res.status(400).json({
-        message: "A valid QR token is required."
+        message: "Invalid meal slot ID.",
       });
     }
 
-    let payload;
-
-    try {
-      payload = jwt.verify(token, getQrSecret(), {
-        issuer: "mess-matrix",
-        audience: "meal-checkin",
-        algorithms: ["HS256"]
-      });
-    } catch {
-      return res.status(401).json({
-        message: "QR token is invalid or expired."
-      });
-    }
-
-    if (
-      typeof payload !== "object" ||
-      payload.purpose !== "meal-checkin" ||
-      payload.mealSlotId !== mealSlotId ||
-      typeof payload.sub !== "string"
-    ) {
-      return res.status(401).json({
-        message: "QR code is not valid for this meal slot."
-      });
-    }
-
-    const slot = await MealSlot.findById(mealSlotId);
+    const slot = await MealSlot.findById(mealSlotId).lean();
 
     if (!slot) {
       return res.status(404).json({
-        message: "Meal slot not found."
+        message: "Meal slot not found.",
       });
     }
 
-    const now = new Date();
-
-    if (
-      slot.status !== SlotStatus.OPEN ||
-      now < slot.startTime ||
-      now >= slot.endTime
-    ) {
-      return res.status(409).json({
-        message: "Check-in is allowed only during meal service."
-      });
-    }
-
-    // Atomic update prevents two simultaneous scans from checking
-    // in the same booking twice.
-    const booking = await Booking.findOneAndUpdate(
-      {
-        studentId: payload.sub,
-        mealSlotId: slot._id,
-        status: BookingStatus.OPTED_IN
-      },
-      {
-        $set: {
-          status: BookingStatus.CHECKED_IN,
-          checkedInAt: now,
-          checkedInBy: req.user.id
-        }
-      },
-      {
-        new: true,
-        runValidators: true
-      }
-    );
-
-    if (!booking) {
-      const existing = await Booking.findOne({
-        studentId: payload.sub,
-        mealSlotId: slot._id
-      }).select("status");
-
-      if (!existing) {
-        return res.status(404).json({
-          message: "No booking found for this student and meal."
-        });
-      }
-
-      if (existing.status === BookingStatus.CHECKED_IN) {
-        return res.status(409).json({
-          message: "This student has already checked in."
-        });
-      }
-
-      return res.status(409).json({
-        message: "This booking is not eligible for check-in."
-      });
-    }
+    const bookings = await Booking.find({
+      mealSlotId,
+      status: BookingStatus.CHECKED_IN,
+    })
+      .select("studentId mealSlotId status checkedInAt checkedInBy")
+      .populate("studentId", "name email")
+      .lean();
 
     return res.json({
-      message: "QR verified. Student checked in successfully.",
-      attendance: {
-        mealSlotId: slot._id,
-        studentId: booking.studentId,
-        status: booking.status,
-        checkedInAt: booking.checkedInAt
-      }
+      mealSlotId,
+      checkedInCount: bookings.length,
+      attendance: bookings,
     });
   } catch (error) {
     next(error);

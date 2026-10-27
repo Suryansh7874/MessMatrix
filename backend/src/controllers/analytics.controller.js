@@ -3,8 +3,8 @@ import { z } from "zod";
 import MealSlot from "../models/MealSlot.js";
 import Booking from "../models/Booking.js";
 
-const dateSchema = z.string().regex(
-  /^\d{4}-\d{2}-\d{2}$/,
+const dateSchema = z.string().regex(//regex to validate date format YYYY-MM-DD
+  /^\d{4}-\d{2}-\d{2}$/,            //regex pattern to match the date format YYYY-MM-DD
   "Date must be in YYYY-MM-DD format."
 );
 
@@ -24,7 +24,7 @@ function getISTDayRange(dateString) {
   return { $gte: start, $lt: end };
 }
 
-function getDateRange(from, to) {
+function getDateRange(from, to) {// Function to get the date range for the analytics report based on the provided 'from' and 'to' dates.
   const fromParsed = dateSchema.safeParse(from);
   const toParsed = dateSchema.safeParse(to);
 
@@ -40,8 +40,8 @@ function getDateRange(from, to) {
   }
 
   return {
-    start: startRange.$gte,
-    end: endRange.$lt
+    start: startRange.$gte,//startRange.$gte is the start of the date range (inclusive) //gte means greater than or equal to, so the start date is included in the range
+    end: endRange.$lt      //endRange.$lt is the end of the date range (exclusive)      //lt means less than, so the end date is excluded from the range
   };
 }
 
@@ -62,7 +62,7 @@ async function buildReport(slots) {
     };
   }
 
-  const slotIds = slots.map((slot) => slot._id);
+  const slotIds = slots.map((slot) => slot._id); // Extract the IDs of the meal slots to use in the aggregation query
 
   const bookingGroups = await Booking.aggregate([
     {
@@ -82,7 +82,7 @@ async function buildReport(slots) {
   ]);
 
   // Build status counts separately for each meal slot.
-  const bookingCounts = new Map();
+  const bookingCounts = new Map();  // Map to hold booking counts for each meal slot, keyed by mealSlotId
 
   for (const group of bookingGroups) {
     const slotId = group._id.mealSlotId;
@@ -103,8 +103,7 @@ async function buildReport(slots) {
     const cancelled = counts.CANCELLED || 0;
     const noShow = counts.NO_SHOW || 0;
 
-    // Once the cutoff has been locked, finalHeadcount is the
-    // official expected count. Before locking, use active bookings.
+    // Once the cutoff has been locked, finalHeadcount is the official expected count. Before locking, use active bookings.
     const expectedAttendees =
       slot.finalHeadcount ?? optedIn + checkedIn;
 

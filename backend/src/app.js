@@ -10,6 +10,7 @@ import adminRoutes from "./routes/admin.routes.js";
 import { notFound, errorHandler } from "./middleware/error.middleware.js";
 import attendanceRoutes from "./routes/attendance.routes.js";
 import analyticsRoutes from "./routes/analytics.routes.js";
+import rebateRoutes from "./routes/rebate.routes.js";
 
 
 const app = express();
@@ -28,6 +29,7 @@ app.use("/api/bookings", bookingRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/attendance", attendanceRoutes);
 app.use("/api/analytics", analyticsRoutes);
+app.use("/api/rebates", rebateRoutes);  
 
 app.use(notFound);
 app.use(errorHandler);

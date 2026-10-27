@@ -5,7 +5,7 @@ import {
   getMe,
   forgotPassword,
   resetPassword
-} from "../controllers/auth.Controller.js";
+} from "../controllers/auth.controller.js";
 import { authenticate } from "../middleware/auth.middleware.js";
 import rateLimit from "express-rate-limit";
 

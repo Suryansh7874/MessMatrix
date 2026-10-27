@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 
 const schema = new mongoose.Schema({
   _id: { type: String, default: () => randomUUID() },
-  mealSlotId: { type: String, ref: "MealSlot", required: true, unique: true },
+  mealSlotId: { type: String, ref: "MealSlot", required: true, unique: true }, 
   date: { type: Date, required: true },
   expectedCount: { type: Number, required: true, min: 0 },
   actualCount: { type: Number, required: true, min: 0 },
