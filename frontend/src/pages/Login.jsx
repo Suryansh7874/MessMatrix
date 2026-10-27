@@ -812,7 +812,7 @@ export default function Login() {
       otherStorage.removeItem("token");
       otherStorage.removeItem("user");
 
-      // App.jsx currently has no dashboard route, so return to the landing page.
+  // App.jsx currently has no dashboard route, so return to the landing page.
       const dashboardPaths = {
   STUDENT: "/student",
   MESS_STAFF: "/staff",
@@ -952,17 +952,15 @@ navigate(destination, { replace: true });
                   PASSCODE
                 </label>
 
-                <button
-                  className="text-link"
-                  type="button"
-                  onClick={() =>
-                    setMessage(
-                      "Password recovery will be added later."
-                    )
-                  }
-                >
-                  Forgot passcode?
-                </button>
+              
+
+<Link
+  to="/forgot-password"
+  className="text-link forgot-password"
+>
+  Forgot Password?
+</Link>
+
               </div>
 
               <div className="input-wrap">

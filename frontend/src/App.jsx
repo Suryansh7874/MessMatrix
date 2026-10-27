@@ -8,7 +8,9 @@ import StudentPage from "./pages/StudentPage.jsx";
 import StaffPage from "./pages/StaffPage.jsx";
 import MessAdmin from "./pages/MessAdmin.jsx";
 import ProtectedRoute from "./components/ProtectedRoute.jsx";
+import ForgotPassword from "./pages/ForgotPassword";
 
+import ResetPassword from "./pages/ResetPassword.jsx";
 import "./App.css";
 
 function App() {
@@ -44,9 +46,18 @@ function App() {
           </ProtectedRoute>
         }
       />
+<Route
+  path="/forgot-password"
+  element={<ForgotPassword />}
+/>
 
+<Route
+  path="/reset-password"
+  element={<ResetPassword />}
+/>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+    
   );
 }
 
