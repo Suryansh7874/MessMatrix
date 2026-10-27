@@ -8,7 +8,6 @@ const api = axios.create({
   },
 });
 
-// Read the token from whichever storage the login page used.
 api.interceptors.request.use((config) => {
   const token =
     localStorage.getItem("token") ||

@@ -1,34 +1,6 @@
 
 import { useEffect, useMemo, useState } from "react";
-
-const initialMeals = [
-  { id: 1, name: "Breakfast", time: "7:30 AM – 9:00 AM", menu: "Poha, Paratha, Milk", capacity: 250, booked: 184, open: true },
-  { id: 2, name: "Lunch", time: "12:30 PM – 2:00 PM", menu: "Dal, Rice, Roti, Sabzi", capacity: 350, booked: 296, open: true },
-  { id: 3, name: "Snacks", time: "5:00 PM – 6:00 PM", menu: "Tea, Samosa, Biscuits", capacity: 180, booked: 92, open: true },
-  { id: 4, name: "Dinner", time: "7:30 PM – 9:00 PM", menu: "Paneer, Roti, Rice, Salad", capacity: 350, booked: 0, open: false },
-];
-
-const initialBookings = [
-  { id: "MM-1021", student: "Aarav Sharma", meal: "Lunch", date: "2026-10-23", status: "Confirmed" },
-  { id: "MM-1022", student: "Ananya Verma", meal: "Dinner", date: "2026-10-23", status: "Pending" },
-  { id: "MM-1023", student: "Rohan Gupta", meal: "Breakfast", date: "2026-10-23", status: "Confirmed" },
-  { id: "MM-1024", student: "Priya Singh", meal: "Lunch", date: "2026-10-23", status: "Pending" },
-  { id: "MM-1025", student: "Kabir Mehta", meal: "Snacks", date: "2026-10-23", status: "Cancelled" },
-];
-
-const initialStaff = [
-  { id: 1, name: "Rajesh Kumar", email: "rajesh@example.com", phone: "9876543210", role: "Kitchen Manager", shift: "Morning", active: true },
-  { id: 2, name: "Sunita Devi", email: "sunita@example.com", phone: "9876543211", role: "Kitchen Staff", shift: "Evening", active: true },
-  { id: 3, name: "Amit Yadav", email: "amit@example.com", phone: "9876543212", role: "Dining Hall Staff", shift: "Morning", active: false },
-];
-
-const initialInventory = [
-  { id: 1, name: "Rice", category: "Grains", quantity: 85, unit: "kg", minimum: 30 },
-  { id: 2, name: "Wheat Flour", category: "Grains", quantity: 42, unit: "kg", minimum: 25 },
-  { id: 3, name: "Milk", category: "Dairy", quantity: 18, unit: "litres", minimum: 25 },
-  { id: 4, name: "Cooking Oil", category: "Essentials", quantity: 32, unit: "litres", minimum: 15 },
-  { id: 5, name: "Lentils", category: "Grains", quantity: 54, unit: "kg", minimum: 20 },
-];
+import api from "../services/api";
 
 const navigation = [
   { id: "Overview", icon: "⌂", label: "Overview" },
@@ -49,10 +21,11 @@ const money = (value) =>
 
 export default function MessAdmin() {
   const [activeTab, setActiveTab] = useState("Overview");
-  const [meals, setMeals] = useState(initialMeals);
-  const [bookings, setBookings] = useState(initialBookings);
-  const [staff, setStaff] = useState(initialStaff);
-  const [inventory, setInventory] = useState(initialInventory);
+  const [meals, setMeals] = useState([]);
+  const [bookings, setBookings] = useState([]);
+  const [staff, setStaff] = useState([]);
+  const [inventory, setInventory] = useState([]);
+  const [overview, setOverview] = useState(null);
   const [search, setSearch] = useState("");
   const [bookingFilter, setBookingFilter] = useState("All");
   const [toast, setToast] = useState("");
@@ -74,10 +47,73 @@ export default function MessAdmin() {
     menu: "",
     capacity: "200",
   });
+  const [loadingData, setLoadingData] = useState(true);
 
   useEffect(() => {
     const timer = setInterval(() => setClock(new Date()), 1000);
     return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadDashboardData() {
+      setLoadingData(true);
+      const [menusResult, slotsResult, overviewResult] = await Promise.allSettled([
+        api.get("/menu"),
+        api.get("/meal-slots"),
+        api.get("/analytics/overview"),
+      ]);
+      if (cancelled) return;
+
+      if (menusResult.status === "rejected") {
+        setToast(menusResult.reason?.response?.data?.message || "Could not load menus.");
+      }
+
+      if (overviewResult.status === "fulfilled") {
+        setOverview(overviewResult.value.data);
+      } else {
+        setToast(overviewResult.reason?.response?.data?.message || "Could not load analytics.");
+      }
+
+      if (slotsResult.status === "fulfilled") {
+        const slots = slotsResult.value.data.mealSlots ?? [];
+        const headcounts = await Promise.all(slots.map((slot) =>
+          api.get(`/meal-slots/${slot._id}/headcount`)
+            .then((response) => response.data)
+            .catch(() => ({ currentOptedInCount: 0, finalHeadcount: null }))
+        ));
+        if (cancelled) return;
+
+        const availableMenus = menusResult.status === "fulfilled"
+          ? (menusResult.value.data.menus ?? [])
+          : [];
+        setMeals(slots.map((slot, index) => {
+          const menu = slot.menuId && typeof slot.menuId === "object"
+            ? slot.menuId
+            : availableMenus.find((item) => item._id === slot.menuId);
+          const headcount = headcounts[index] ?? {};
+          return {
+            id: slot._id,
+            name: String(slot.mealType ?? "Meal").charAt(0) + String(slot.mealType ?? "Meal").slice(1).toLowerCase(),
+            time: `${formatTime(new Date(slot.startTime))} – ${formatTime(new Date(slot.endTime))}`,
+            menu: menu?.description || menu?.name || "Menu details unavailable",
+            capacity: Number(slot.preparedPortions ?? slot.finalHeadcount ?? 0),
+            booked: Number(headcount.currentOptedInCount ?? 0),
+            open: slot.status === "OPEN" && !slot.bookingLocked && new Date(slot.cutoffTime) > new Date(),
+            status: slot.status,
+            menuId: menu?._id ?? slot.menuId,
+          };
+        }));
+      } else {
+        setToast(slotsResult.reason?.response?.data?.message || "Could not load meal slots.");
+      }
+
+      if (!cancelled) setLoadingData(false);
+    }
+
+    loadDashboardData();
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -90,7 +126,8 @@ export default function MessAdmin() {
 
   const totalCapacity = meals.reduce((sum, meal) => sum + meal.capacity, 0);
   const totalBooked = meals.reduce((sum, meal) => sum + meal.booked, 0);
-  const confirmedBookings = bookings.filter((b) => b.status === "Confirmed").length;
+  const checkedInAttendees = Number(overview?.checkedIn ?? 0);
+  const totalBookingsRecorded = Number(overview?.totalBookings ?? bookings.length);
   const pendingBookings = bookings.filter((b) => b.status === "Pending").length;
   const activeStaff = staff.filter((member) => member.active).length;
   const lowStock = inventory.filter((item) => item.quantity < item.minimum).length;
@@ -120,31 +157,16 @@ export default function MessAdmin() {
     setMobileMenu(false);
   };
 
-  const updateBooking = (id, status) => {
-    setBookings((current) =>
-      current.map((booking) =>
-        booking.id === id ? { ...booking, status } : booking
-      )
-    );
-    notify(`Booking ${id} marked ${status.toLowerCase()}.`);
+  const updateBooking = () => {
+    notify("The backend does not yet provide an admin booking-update endpoint.");
   };
 
-  const toggleMeal = (id) => {
-    setMeals((current) =>
-      current.map((meal) =>
-        meal.id === id ? { ...meal, open: !meal.open } : meal
-      )
-    );
-    notify("Meal availability updated.");
+  const toggleMeal = () => {
+    notify("The backend does not yet provide an endpoint to open or close an existing meal slot.");
   };
 
-  const registerStaff = (event) => {
+  const registerStaff = async (event) => {
     event.preventDefault();
-
-    if (staff.some((member) => member.email.toLowerCase() === staffForm.email.trim().toLowerCase())) {
-      notify("A staff member with this email already exists.");
-      return;
-    }
 
     if (!/^\d{10}$/.test(staffForm.phone)) {
       notify("Enter a valid 10-digit phone number.");
@@ -156,74 +178,134 @@ export default function MessAdmin() {
       return;
     }
 
-    const newStaff = {
-      id: Date.now(),
-      name: staffForm.name.trim(),
-      email: staffForm.email.trim(),
-      phone: staffForm.phone.trim(),
-      role: staffForm.role,
-      shift: staffForm.shift,
-      active: true,
-    };
+    try {
+      const response = await api.post("/admin/staff", {
+        name: staffForm.name.trim(),
+        email: staffForm.email.trim(),
+        employeeId: `EMP-${Date.now()}`,
+        password: staffForm.password,
+      });
 
-    setStaff((current) => [...current, newStaff]);
-    setStaffForm({
-      name: "",
-      email: "",
-      phone: "",
-      role: "Kitchen Staff",
-      shift: "Morning",
-      password: "",
-    });
-    setShowStaffForm(false);
-    notify("Staff record added to this demo.");
+      const user = response.data.user;
+      setStaff((current) => [...current, {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        employeeId: user.employeeId,
+        phone: staffForm.phone.trim(),
+        role: staffForm.role,
+        shift: staffForm.shift,
+        active: true,
+      }]);
+
+      setStaffForm({
+        name: "",
+        email: "",
+        phone: "",
+        role: "Kitchen Staff",
+        shift: "Morning",
+        password: "",
+      });
+      setShowStaffForm(false);
+      notify("Staff account created. The backend does not yet provide a staff-list endpoint.");
+    } catch (error) {
+      notify(error.response?.data?.message || "Could not create staff account.");
+    }
   };
 
-  const addMeal = (event) => {
+  const addMeal = async (event) => {
     event.preventDefault();
 
-    const capacity = Number(mealForm.capacity);
-    if (!mealForm.name.trim() || !mealForm.time.trim() || capacity < 1) {
-      notify("Enter a meal name, time, and valid capacity.");
+    if (!mealForm.name.trim() || !mealForm.time.trim()) {
+      notify("Enter a meal name and serving time.");
       return;
     }
 
-    setMeals((current) => [
-      ...current,
-      {
-        id: Date.now(),
+    const mealText = `${mealForm.name} ${mealForm.menu}`.toLowerCase();
+    const mealType = mealText.includes("breakfast")
+      ? "BREAKFAST"
+      : mealText.includes("lunch")
+        ? "LUNCH"
+        : mealText.includes("dinner")
+          ? "DINNER"
+          : null;
+
+    if (!mealType) {
+      notify("The backend supports BREAKFAST, LUNCH, or DINNER. Include one in the meal name.");
+      return;
+    }
+
+    let serviceWindow;
+    try {
+      serviceWindow = parseServingWindow(mealForm.time);
+    } catch (error) {
+      notify(error.message);
+      return;
+    }
+
+    try {
+      const menuResponse = await api.post("/menu", {
         name: mealForm.name.trim(),
-        time: mealForm.time.trim(),
-        menu: mealForm.menu.trim() || "Menu to be announced",
-        capacity,
-        booked: 0,
-        open: true,
-      },
-    ]);
+        description: mealForm.menu.trim(),
+        mealType,
+        date: serviceWindow.start.toISOString(),
+        price: 0,
+        imageUrl: "",
+      });
 
-    setMealForm({ name: "", time: "", menu: "", capacity: "200" });
-    setShowMealForm(false);
-    notify("New meal slot added.");
+      await api.post("/meal-slots", {
+        menuId: menuResponse.data.menu._id,
+        mealType,
+        date: serviceWindow.start.toISOString(),
+        startTime: serviceWindow.start.toISOString(),
+        endTime: serviceWindow.end.toISOString(),
+        cutoffTime: serviceWindow.cutoff.toISOString(),
+      });
+
+      setMealForm({ name: "", time: "", menu: "", capacity: "200" });
+      setShowMealForm(false);
+      notify("Meal slot created. Capacity is not stored by the current backend model.");
+
+      const [menusResponse, slotsResponse] = await Promise.all([
+        api.get("/menu"),
+        api.get("/meal-slots"),
+      ]);
+      const refreshedMenus = menusResponse.data.menus ?? [];
+      const slots = slotsResponse.data.mealSlots ?? [];
+      const headcounts = await Promise.all(slots.map((slot) =>
+        api.get(`/meal-slots/${slot._id}/headcount`)
+          .then((response) => response.data)
+          .catch(() => ({ currentOptedInCount: 0, finalHeadcount: null }))
+      ));
+
+      setMeals(slots.map((slot, index) => {
+        const menu = slot.menuId && typeof slot.menuId === "object"
+          ? slot.menuId
+          : refreshedMenus.find((item) => item._id === slot.menuId);
+        const count = headcounts[index] ?? {};
+        return {
+          id: slot._id,
+          name: String(slot.mealType ?? "Meal").charAt(0) + String(slot.mealType ?? "Meal").slice(1).toLowerCase(),
+          time: `${formatTime(new Date(slot.startTime))} – ${formatTime(new Date(slot.endTime))}`,
+          menu: menu?.description || menu?.name || "Menu details unavailable",
+          capacity: Number(slot.preparedPortions ?? slot.finalHeadcount ?? 0),
+          booked: Number(count.currentOptedInCount ?? 0),
+          open: slot.status === "OPEN" && !slot.bookingLocked && new Date(slot.cutoffTime) > new Date(),
+          status: slot.status,
+          menuId: menu?._id ?? slot.menuId,
+        };
+      }));
+    } catch (error) {
+      notify(error.response?.data?.message || "Could not create meal slot. Check the menu type and serving times.");
+    }
   };
 
-  const toggleStaff = (id) => {
-    setStaff((current) =>
-      current.map((member) =>
-        member.id === id ? { ...member, active: !member.active } : member
-      )
-    );
-    notify("Staff status updated.");
+  const toggleStaff = () => {
+    notify("The backend does not yet provide an endpoint to activate or deactivate staff.");
   };
 
-  const updateStock = (id, amount) => {
-    setInventory((current) =>
-      current.map((item) =>
-        item.id === id
-          ? { ...item, quantity: Math.max(0, item.quantity + amount) }
-          : item
-      )
-    );
-    notify("Inventory quantity updated.");
+  const updateStock = () => {
+    notify("Inventory is not connected because no inventory API is currently available.");
   };
 
   const exportBookings = () => {
@@ -1619,10 +1701,10 @@ export default function MessAdmin() {
         <div className="mm-sidebar-bottom">
           <div className="mm-archive-card">
             <h4>✧ The Keeper's Archive</h4>
-            <p>Every meal accounted for. Every resource wisely managed.</p>
+            <p>Menus, meal slots, and analytics are loaded from the backend.</p>
             <div className="mm-status-line">
               <span className="mm-dot" />
-              Demo system operational
+              {loadingData ? "Loading live data…" : "API connection attempted"}
             </div>
           </div>
           <div style={{
@@ -1701,8 +1783,8 @@ export default function MessAdmin() {
 
             <div className="mm-stats">
               <Stat icon="♙" label="Registered Staff" value={staff.length} trend={`${activeStaff} active`} foot="Staff directory records" />
-              <Stat icon="♨" label="Today's Meal Capacity" value={totalCapacity.toLocaleString("en-IN")} trend="All sessions" foot={`${totalBooked.toLocaleString("en-IN")} seats currently booked`} />
-              <Stat icon="▤" label="Confirmed Bookings" value={confirmedBookings} trend="Confirmed" foot={`${pendingBookings} booking requests pending`} />
+              <Stat icon="♨" label="Prepared Portions" value={totalCapacity.toLocaleString("en-IN")} trend="All sessions" foot={`${totalBooked.toLocaleString("en-IN")} opted-in bookings`} />
+              <Stat icon="▤" label="Checked-In Attendees" value={checkedInAttendees} trend="Attendance" foot={`${Number(overview?.expectedAttendees ?? 0)} expected attendees`} />
               <Stat icon="▧" label="Low Stock Alerts" value={lowStock} trend={lowStock ? "Attention needed" : "All in order"} foot="Inventory below minimum level" />
             </div>
 
@@ -1740,7 +1822,7 @@ export default function MessAdmin() {
                       </div>
                       <div className="mm-meal-count">
                         {meal.booked}
-                        <small>/ {meal.capacity}</small>
+                        <small>{meal.capacity ? `/ ${meal.capacity} prepared` : "opted in"}</small>
                       </div>
                     </div>
                   ))}
@@ -1772,7 +1854,7 @@ export default function MessAdmin() {
                   ))}
                 </div>
                 <div className="mm-chart-legend">
-                  <i /> Number of seats booked
+                  <i /> Number of opted-in bookings
                 </div>
                 <div style={{
                   marginTop: 19,
@@ -1781,7 +1863,7 @@ export default function MessAdmin() {
                   background: "rgba(228,189,115,.045)",
                   border: "1px solid rgba(228,189,115,.1)",
                 }}>
-                  <div style={{ color: "var(--mm-muted)", fontSize: 10 }}>Total seats currently booked</div>
+                  <div style={{ color: "var(--mm-muted)", fontSize: 10 }}>Total opted-in bookings</div>
                   <div style={{ fontFamily: "'Cinzel', serif", color: "var(--mm-gold-bright)", fontSize: 25, marginTop: 5 }}>
                     {totalBooked.toLocaleString("en-IN")}
                   </div>
@@ -1872,8 +1954,8 @@ export default function MessAdmin() {
                     <div style={{ width: `${Math.min(100, (meal.booked / meal.capacity) * 100)}%` }} />
                   </div>
                   <div className="mm-meal-card-foot">
-                    <span>{meal.booked} / {meal.capacity} seats booked</span>
-                    <span>{Math.max(0, meal.capacity - meal.booked)} available</span>
+                    <span>{meal.booked} opted in · {meal.capacity ? `${meal.capacity} portions recorded` : "capacity not configured"}</span>
+                    <span>{meal.capacity ? `${Math.max(0, meal.capacity - meal.booked)} remaining` : "availability unknown"}</span>
                   </div>
                   <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
                     <button className={`mm-btn small ${meal.open ? "danger" : "primary"}`} onClick={() => toggleMeal(meal.id)}>
@@ -1897,9 +1979,9 @@ export default function MessAdmin() {
             </div>
 
             <div className="mm-stats">
-              <Stat icon="▤" label="All Bookings" value={bookings.length} trend="Ledger" foot="All recorded demo entries" />
-              <Stat icon="✓" label="Confirmed" value={confirmedBookings} trend="Approved" foot="Confirmed meal bookings" />
-              <Stat icon="◷" label="Pending Review" value={pendingBookings} trend="Action needed" foot="Awaiting confirmation" />
+              <Stat icon="▤" label="All Bookings" value={totalBookingsRecorded} trend="Analytics" foot="Records in the analytics period" />
+              <Stat icon="✓" label="Checked In" value={checkedInAttendees} trend="Attendance" foot="Verified attendance records" />
+              <Stat icon="◷" label="Pending Review" value={pendingBookings} trend="Unavailable" foot="Admin booking-list API not available" />
               <Stat icon="×" label="Cancelled" value={bookings.filter((b) => b.status === "Cancelled").length} trend="Closed" foot="Cancelled entries" />
             </div>
 
@@ -1965,9 +2047,9 @@ export default function MessAdmin() {
             <div className="mm-section-head">
               <div>
                 <h3>Student Directory</h3>
-                <p>Student records derived from the current demo booking ledger.</p>
+                <p>Student records require an admin-authorized student-list endpoint.</p>
               </div>
-              <span className="mm-tag">Read-only demo view</span>
+              <span className="mm-tag">API endpoint required</span>
             </div>
             <div className="mm-toolbar">
               <div className="mm-search">
@@ -2001,7 +2083,7 @@ export default function MessAdmin() {
             </section>
             <div className="mm-note" style={{ marginTop: 16 }}>
               <span>✧</span>
-              <div><b>Data note:</b> this student directory is derived from the sample bookings in this dashboard. Connect your backend to display the actual registered student accounts.</div>
+              <div><b>Data note:</b> the current backend does not expose an admin-authorized student-list endpoint.</div>
             </div>
           </>
         )}
@@ -2025,7 +2107,7 @@ export default function MessAdmin() {
 
                 <div className="mm-note">
                   <span>✧</span>
-                  <div><b>Secure registration:</b> in the connected version, submit these details to a protected backend endpoint. This demo does not create an authenticated account or store the password.</div>
+                  <div><b>Secure registration:</b> this form creates a real MESS_STAFF account through the protected backend. Employee ID is generated automatically; phone, shift, and the selected display role are not stored by the current model.</div>
                 </div>
 
                 <div className="mm-form-grid">
@@ -2069,8 +2151,8 @@ export default function MessAdmin() {
             )}
 
             <div className="mm-stats">
-              <Stat icon="♟" label="Total Staff Records" value={staff.length} trend="Directory" foot="Registered in this demo" />
-              <Stat icon="✓" label="Active Members" value={activeStaff} trend="Active" foot="Currently marked active" />
+              <Stat icon="♟" label="Total Staff Records" value={staff.length} trend="Directory" foot="Created during this session" />
+              <Stat icon="✓" label="Active Members" value={activeStaff} trend="Active" foot="Created during this session" />
               <Stat icon="◷" label="Inactive Members" value={staff.length - activeStaff} trend="Inactive" foot="Can be reactivated" />
               <Stat icon="✧" label="Assigned Roles" value={new Set(staff.map((member) => member.role)).size} trend="Role types" foot="Across the staff directory" />
             </div>
@@ -2174,7 +2256,7 @@ export default function MessAdmin() {
 
             <div className="mm-note" style={{ marginTop: 17 }}>
               <span>✧</span>
-              <div><b>Inventory controls:</b> these buttons modify the demo's local quantities in increments of five. Connect the inventory API for persistent stock updates and a proper audit trail.</div>
+              <div><b>Inventory controls:</b> the backend currently has no inventory API, so stock changes are disabled until one is added.</div>
             </div>
           </>
         )}
@@ -2184,21 +2266,21 @@ export default function MessAdmin() {
             <div className="mm-section-head">
               <div>
                 <h3>Reports & Insights</h3>
-                <p>A summary calculated from the current dashboard's data.</p>
+                <p>A summary based on the backend analytics endpoint where available.</p>
               </div>
-              <span className="mm-tag">✧ Live demo calculations</span>
+              <span className="mm-tag">{overview ? "✧ Backend analytics" : "✧ Analytics unavailable"}</span>
             </div>
 
             <div className="mm-report-grid">
               <section className="mm-panel">
                 <div className="mm-panel-title">
-                  <div><h3>Meal Capacity Utilisation</h3><p>Seats booked relative to total capacity</p></div>
+                  <div><h3>Prepared Portions vs Opt-ins</h3><p>Opted-in bookings compared with recorded portions</p></div>
                   <span className="mm-tag">♨</span>
                 </div>
                 <div className="mm-report-value">
                   {totalCapacity ? Math.round((totalBooked / totalCapacity) * 100) : 0}%
                 </div>
-                <div className="mm-report-copy">{totalBooked.toLocaleString("en-IN")} booked seats out of {totalCapacity.toLocaleString("en-IN")} total seats across configured meal sessions.</div>
+                <div className="mm-report-copy">{totalBooked.toLocaleString("en-IN")} opted-in bookings compared with {totalCapacity.toLocaleString("en-IN")} recorded prepared portions.</div>
                 <div className="mm-progress-line">
                   <div style={{ width: `${totalCapacity ? Math.min(100, (totalBooked / totalCapacity) * 100) : 0}%` }} />
                 </div>
@@ -2206,15 +2288,15 @@ export default function MessAdmin() {
 
               <section className="mm-panel">
                 <div className="mm-panel-title">
-                  <div><h3>Booking Confirmation Rate</h3><p>Confirmed bookings against all entries</p></div>
+                  <div><h3>Attendance Rate</h3><p>Checked-in attendees against expected attendees</p></div>
                   <span className="mm-tag">▤</span>
                 </div>
                 <div className="mm-report-value">
-                  {bookings.length ? Math.round((confirmedBookings / bookings.length) * 100) : 0}%
+                  {overview?.attendanceRate != null ? Math.round(Number(overview.attendanceRate)) : 0}%
                 </div>
-                <div className="mm-report-copy">{confirmedBookings} confirmed booking(s), {pendingBookings} pending, and {bookings.filter((b) => b.status === "Cancelled").length} cancelled.</div>
+                <div className="mm-report-copy">{checkedInAttendees} checked in out of {Number(overview?.expectedAttendees ?? 0)} expected attendees.</div>
                 <div className="mm-progress-line">
-                  <div style={{ width: `${bookings.length ? (confirmedBookings / bookings.length) * 100 : 0}%` }} />
+                  <div style={{ width: `${overview?.attendanceRate != null ? Math.min(100, Number(overview.attendanceRate)) : 0}%` }} />
                 </div>
               </section>
 
@@ -2254,7 +2336,7 @@ export default function MessAdmin() {
               <div className="mm-table-wrap">
                 <table className="mm-table">
                   <thead>
-                    <tr><th>Meal</th><th>Time</th><th>Capacity</th><th>Booked</th><th>Available</th><th>Utilisation</th></tr>
+                    <tr><th>Meal</th><th>Time</th><th>Prepared</th><th>Opted In</th><th>Difference</th><th>Opt-ins / Prepared</th></tr>
                   </thead>
                   <tbody>
                     {meals.map((meal) => (
@@ -2263,7 +2345,7 @@ export default function MessAdmin() {
                         <td>{meal.time}</td>
                         <td>{meal.capacity}</td>
                         <td>{meal.booked}</td>
-                        <td>{Math.max(0, meal.capacity - meal.booked)}</td>
+                        <td>{meal.capacity ? meal.capacity - meal.booked : "—"}</td>
                         <td>{meal.capacity ? Math.round((meal.booked / meal.capacity) * 100) : 0}%</td>
                       </tr>
                     ))}
@@ -2274,7 +2356,7 @@ export default function MessAdmin() {
 
             <div className="mm-note" style={{ marginTop: 17 }}>
               <span>✧</span>
-              <div><b>Reporting note:</b> these reports are calculated from the dashboard's sample state. They are not historical analytics or verified financial figures.</div>
+              <div><b>Reporting note:</b> meal-slot analytics are fetched from the backend; staff and inventory reporting remains unavailable until listing APIs are added.</div>
             </div>
           </>
         )}
@@ -2288,6 +2370,43 @@ export default function MessAdmin() {
       {toast && <div className="mm-toast" role="status">{toast}</div>}
     </div>
   );
+}
+
+
+function formatTime(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return "Time unavailable";
+  return date.toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", hour12: true });
+}
+
+function parseServingWindow(input) {
+  const match = input.match(/(\d{1,2}:\d{2}\s*[AP]M)\s*(?:–|-|to)\s*(\d{1,2}:\d{2}\s*[AP]M)/i);
+  if (!match) throw new Error("Use a time range like 7:30 PM – 9:00 PM.");
+
+  const parseClock = (value) => {
+    const parts = value.trim().match(/^(\d{1,2}):(\d{2})\s*([AP]M)$/i);
+    if (!parts) throw new Error("Use a time range like 7:30 PM – 9:00 PM.");
+    let hour = Number(parts[1]) % 12;
+    if (parts[3].toUpperCase() === "PM") hour += 12;
+    return { hour, minute: Number(parts[2]) };
+  };
+
+  const startClock = parseClock(match[1]);
+  const endClock = parseClock(match[2]);
+  const now = new Date();
+  const start = new Date();
+  start.setHours(startClock.hour, startClock.minute, 0, 0);
+
+  // Schedule the next occurrence with enough time for the 30-minute cutoff.
+  if (start.getTime() <= now.getTime() + 45 * 60 * 1000) {
+    start.setDate(start.getDate() + 1);
+  }
+
+  const end = new Date(start);
+  end.setHours(endClock.hour, endClock.minute, 0, 0);
+  if (end <= start) end.setDate(end.getDate() + 1);
+
+  const cutoff = new Date(start.getTime() - 30 * 60 * 1000);
+  return { start, end, cutoff };
 }
 
 function Stat({ icon, label, value, trend, foot }) {

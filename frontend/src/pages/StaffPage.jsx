@@ -1,54 +1,209 @@
 
-import { useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import api from "../services/api";
+
+const MEAL_META = {
+  BREAKFAST: { name: "Breakfast", icon: "☼" },
+  LUNCH: { name: "Lunch", icon: "✺" },
+  SNACKS: { name: "Snacks", icon: "✧" },
+  DINNER: { name: "Dinner", icon: "☾" },
+};
+
+function formatTime(value) {
+  if (!value) return "Time unavailable";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Time unavailable";
+  return date.toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" });
+}
+
+function formatDate(value) {
+  if (!value) return "Date unavailable";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Date unavailable";
+  return date.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+}
+
+function errorMessage(error, fallback) {
+  return error?.response?.data?.message || fallback;
+}
 
 export default function StaffPage() {
   const [activeTab, setActiveTab] = useState("Overview");
-  const [selectedMeal, setSelectedMeal] = useState("Lunch");
+  const [selectedSlotId, setSelectedSlotId] = useState("");
   const [search, setSearch] = useState("");
   const [notice, setNotice] = useState("");
+  const [noticeType, setNoticeType] = useState("info");
+  const [mealSlots, setMealSlots] = useState([]);
+  const [summaries, setSummaries] = useState({});
+  const [recentCheckIns, setRecentCheckIns] = useState([]);
+  const [studentId, setStudentId] = useState("");
+  const [qrToken, setQrToken] = useState("");
+  const [preparedPortions, setPreparedPortions] = useState("");
+  const [leftoverPortions, setLeftoverPortions] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
 
-  const [checkIns, setCheckIns] = useState([
-    { id: "MM2401", name: "Aarav Sharma", meal: "Lunch", time: "12:15 PM", status: "Checked In" },
-    { id: "MM2402", name: "Priya Verma", meal: "Lunch", time: "12:18 PM", status: "Checked In" },
-    { id: "MM2403", name: "Rohan Gupta", meal: "Lunch", time: "12:22 PM", status: "Checked In" },
-    { id: "MM2404", name: "Ananya Singh", meal: "Breakfast", time: "8:02 AM", status: "Checked In" },
-  ]);
+  const loadMealSlots = useCallback(async () => {
+    setLoading(true);
+    try {
+      const response = await api.get("/meal-slots");
+      const slots = Array.isArray(response.data?.mealSlots)
+        ? response.data.mealSlots
+        : Array.isArray(response.data)
+          ? response.data
+          : [];
+      slots.sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+      setMealSlots(slots);
+      setSelectedSlotId((current) =>
+        slots.some((slot) => slot._id === current) ? current : (slots[0]?._id || "")
+      );
 
-  const meals = [
-    { name: "Breakfast", time: "7:30 AM – 9:00 AM", expected: 180, icon: "☼" },
-    { name: "Lunch", time: "12:00 PM – 2:00 PM", expected: 320, icon: "✺" },
-    { name: "Dinner", time: "7:00 PM – 9:00 PM", expected: 250, icon: "☾" },
-  ];
+      const results = await Promise.allSettled(
+        slots.map((slot) =>
+          api.get(`/attendance/meal-slots/${encodeURIComponent(slot._id)}/summary`)
+        )
+      );
+      const nextSummaries = {};
+      results.forEach((result, index) => {
+        if (result.status === "fulfilled") {
+          nextSummaries[slots[index]._id] = result.value.data;
+        }
+      });
+      setSummaries(nextSummaries);
+    } catch (error) {
+      setNoticeType("error");
+      setNotice(errorMessage(error, "Could not load meal slots. Check the backend connection and try again."));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-  const currentMeal = meals.find((meal) => meal.name === selectedMeal);
-  const mealCheckIns = checkIns.filter((item) => item.meal === selectedMeal);
-  const remaining = Math.max(0, currentMeal.expected - mealCheckIns.length);
+  useEffect(() => {
+    loadMealSlots();
+  }, [loadMealSlots]);
 
-  const filteredCheckIns = checkIns.filter((item) =>
-    `${item.name} ${item.id} ${item.meal}`
-      .toLowerCase()
-      .includes(search.toLowerCase())
+  const meals = useMemo(() => mealSlots.map((slot) => {
+    const meta = MEAL_META[slot.mealType] || { name: slot.mealType || "Meal", icon: "✧" };
+    const summary = summaries[slot._id];
+    const attendance = summary?.attendance || {};
+    return {
+      ...meta,
+      id: slot._id,
+      slot,
+      time: `${formatTime(slot.startTime)} – ${formatTime(slot.endTime)}`,
+      date: formatDate(slot.date || slot.startTime),
+      checkedIn: Number(attendance.checkedIn || 0),
+      expected: Number(attendance.totalExpectedAttendees ?? slot.finalHeadcount ?? 0),
+      pending: Number(attendance.pendingCheckIn || 0),
+      status: slot.status || "UNKNOWN",
+    };
+  }), [mealSlots, summaries]);
+
+  const currentMeal = meals.find((meal) => meal.id === selectedSlotId) || null;
+  const currentSummary = selectedSlotId ? summaries[selectedSlotId] : null;
+  const currentAttendance = currentSummary?.attendance || {};
+  const totalCheckIns = Object.values(summaries).reduce(
+    (total, summary) => total + Number(summary?.attendance?.checkedIn || 0), 0
+  );
+  const currentCheckedIn = Number(currentAttendance.checkedIn || 0);
+  const currentExpected = Number(currentAttendance.totalExpectedAttendees ?? currentMeal?.slot?.finalHeadcount ?? 0);
+  const remaining = Math.max(0, currentExpected - currentCheckedIn);
+
+  const filteredCheckIns = recentCheckIns.filter((item) =>
+    `${item.studentId} ${item.meal} ${item.status}`.toLowerCase().includes(search.toLowerCase())
   );
 
-  function simulateCheckIn() {
-    const newId = `MM${2401 + checkIns.length}`;
+  useEffect(() => {
+    setPreparedPortions(currentMeal?.slot?.preparedPortions ?? "");
+    setLeftoverPortions(currentMeal?.slot?.recordedLeftovers ?? "");
+  }, [selectedSlotId, mealSlots]);
 
-    setCheckIns((previous) => [
-      {
-        id: newId,
-        name: "Demo Student",
-        meal: selectedMeal,
-        time: new Date().toLocaleTimeString("en-IN", {
-          hour: "2-digit",
-          minute: "2-digit",
-        }),
-        status: "Checked In",
-      },
-      ...previous,
-    ]);
+  async function recordManualCheckIn(event) {
+    event.preventDefault();
+    if (!selectedSlotId || !studentId.trim() || busy) return;
+    setBusy(true);
+    setNotice("");
+    try {
+      const response = await api.post(
+        `/attendance/meal-slots/${encodeURIComponent(selectedSlotId)}/check-in`,
+        { studentId: studentId.trim() }
+      );
+      const attendance = response.data?.attendance;
+      setRecentCheckIns((previous) => [{
+        studentId: attendance?.studentId || studentId.trim(),
+        meal: currentMeal?.name || "Meal",
+        time: formatTime(attendance?.checkedInAt || new Date()),
+        status: attendance?.status || "CHECKED_IN",
+      }, ...previous]);
+      setStudentId("");
+      setNoticeType("success");
+      setNotice(response.data?.message || "Student checked in successfully.");
+      await loadMealSlots();
+      setActiveTab("Meal Check-in");
+    } catch (error) {
+      setNoticeType("error");
+      setNotice(errorMessage(error, "Manual check-in failed. Verify the student ID and selected meal slot."));
+    } finally {
+      setBusy(false);
+    }
+  }
 
-    setNotice(`Demo check-in recorded for ${selectedMeal}.`);
-    setActiveTab("Meal Check-in");
+  async function recordQrCheckIn(event) {
+    event.preventDefault();
+    if (!selectedSlotId || !qrToken.trim() || busy) return;
+    setBusy(true);
+    setNotice("");
+    try {
+      const response = await api.post(
+        `/attendance/meal-slots/${encodeURIComponent(selectedSlotId)}/scan`,
+        { token: qrToken.trim() }
+      );
+      const attendance = response.data?.attendance;
+      setRecentCheckIns((previous) => [{
+        studentId: attendance?.studentId || "QR verified student",
+        meal: currentMeal?.name || "Meal",
+        time: formatTime(attendance?.checkedInAt || new Date()),
+        status: attendance?.status || "CHECKED_IN",
+      }, ...previous]);
+      setQrToken("");
+      setNoticeType("success");
+      setNotice(response.data?.message || "QR verified and student checked in.");
+      await loadMealSlots();
+      setActiveTab("Meal Check-in");
+    } catch (error) {
+      setNoticeType("error");
+      setNotice(errorMessage(error, "QR check-in failed. The token may be expired or invalid."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function savePortions(kind, event) {
+    event.preventDefault();
+    const raw = kind === "prepared" ? preparedPortions : leftoverPortions;
+    const portions = Number(raw);
+    if (!selectedSlotId || raw === "" || !Number.isInteger(portions) || portions < 0 || busy) {
+      setNoticeType("error");
+      setNotice("Enter a non-negative whole number of portions.");
+      return;
+    }
+    setBusy(true);
+    setNotice("");
+    try {
+      const endpoint = kind === "prepared" ? "portions" : "leftovers";
+      const response = await api.patch(
+        `/attendance/meal-slots/${encodeURIComponent(selectedSlotId)}/${endpoint}`,
+        { portions }
+      );
+      setNoticeType("success");
+      setNotice(response.data?.message || (kind === "prepared" ? "Prepared portions saved." : "Leftovers saved."));
+      await loadMealSlots();
+    } catch (error) {
+      setNoticeType("error");
+      setNotice(errorMessage(error, "Could not save portions. Please check the value and try again."));
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -740,6 +895,45 @@ export default function StaffPage() {
           background: linear-gradient(110deg,#c5a361,#f0dda9);
         }
 
+        .rf-action-input {
+          width: 100%;
+          min-width: 0;
+          margin: 7px 0 10px;
+          padding: 12px 13px;
+          border: 1px solid rgba(164,185,198,.2);
+          border-radius: 10px;
+          outline: none;
+          background: rgba(4,13,23,.72);
+          color: #f5f0e5;
+          font: inherit;
+          font-size: 12px;
+        }
+        .rf-action-input:focus { border-color: rgba(214,183,119,.65); }
+        .rf-action-form { margin-top: 14px; }
+        .rf-action-form label {
+          display: block;
+          color: #c9d2d8;
+          font-size: 11px;
+          margin-top: 12px;
+        }
+        .rf-secondary {
+          width: 100%;
+          padding: 11px 14px;
+          border: 1px solid rgba(214,183,119,.34);
+          border-radius: 11px;
+          color: #f1dba8;
+          background: rgba(214,183,119,.07);
+          font: inherit;
+          font-size: 11px;
+          font-weight: 700;
+          cursor: pointer;
+        }
+        .rf-secondary:disabled, .rf-primary:disabled { opacity: .55; cursor: wait; }
+        .rf-notice.error { border-color: rgba(240,120,120,.3); background: rgba(127,35,35,.16); color: #ffc4bd; }
+        .rf-notice.success { border-color: rgba(134,198,167,.25); }
+        .rf-status.pending { border-color: rgba(214,183,119,.2); background: rgba(214,183,119,.08); color: #f1dba8; }
+        .rf-status.pending::before { background: #d6b777; box-shadow: none; }
+
         .rf-demo-note {
           margin: 12px 0 0;
           color: #8297a6;
@@ -1127,7 +1321,7 @@ export default function StaffPage() {
           </header>
 
           {notice && (
-            <div className="rf-notice">
+            <div className={`rf-notice ${noticeType}`}>
               <span>✧</span> {notice}
             </div>
           )}
@@ -1138,8 +1332,8 @@ export default function StaffPage() {
                 <div className="rf-stat-label">Today's check-ins</div>
                 <div className="rf-stat-icon jade">↗</div>
               </div>
-              <div className="rf-stat-value">{checkIns.length}</div>
-              <div className="rf-stat-note">Sample dashboard records</div>
+              <div className="rf-stat-value">{totalCheckIns}</div>
+              <div className="rf-stat-note">Total check-ins across loaded meal slots</div>
             </div>
 
             <div className="rf-panel">
@@ -1147,9 +1341,9 @@ export default function StaffPage() {
                 <div className="rf-stat-label">Selected meal</div>
                 <div className="rf-stat-icon">✺</div>
               </div>
-              <div className="rf-stat-value">{mealCheckIns.length}</div>
+              <div className="rf-stat-value">{currentCheckedIn}</div>
               <div className="rf-stat-note">
-                {selectedMeal} check-ins recorded
+                {currentMeal?.name || "No meal selected"} check-ins recorded
               </div>
             </div>
 
@@ -1158,9 +1352,9 @@ export default function StaffPage() {
                 <div className="rf-stat-label">Expected attendance</div>
                 <div className="rf-stat-icon">♧</div>
               </div>
-              <div className="rf-stat-value">{currentMeal.expected}</div>
+              <div className="rf-stat-value">{currentExpected}</div>
               <div className="rf-stat-note">
-                For {selectedMeal.toLowerCase()}
+                For {(currentMeal?.name || "selected meal").toLowerCase()}
               </div>
             </div>
 
@@ -1171,7 +1365,7 @@ export default function StaffPage() {
               </div>
               <div className="rf-stat-value">{remaining}</div>
               <div className="rf-stat-note">
-                Estimated, not live inventory
+                Based on the selected slot attendance summary
               </div>
             </div>
           </section>
@@ -1183,51 +1377,39 @@ export default function StaffPage() {
                   Today's meal sessions
                 </h2>
                 <p className="rf-section-subtitle">
-                  Choose a session to view its attendance and check-in activity.
+                  Choose a backend meal slot to view its live attendance summary.
                 </p>
+                <button className="rf-secondary" type="button" onClick={loadMealSlots} disabled={loading || busy} style={{ marginBottom: 16 }}>
+                  {loading ? "Refreshing…" : "Refresh meal slots and attendance ↻"}
+                </button>
                 <div className="rf-section-ornament">✧ SESSION SCHEDULE</div>
 
                 <div className="rf-meal-list">
-                  {meals.map((meal) => {
-                    const count = checkIns.filter(
-                      (item) => item.meal === meal.name
-                    ).length;
-
+                  {loading ? (
+                    <div className="rf-empty">Loading meal slots…</div>
+                  ) : meals.length === 0 ? (
+                    <div className="rf-empty">No meal slots returned by the backend yet.</div>
+                  ) : meals.map((meal) => {
+                    const progress = meal.expected > 0 ? Math.min(100, (meal.checkedIn / meal.expected) * 100) : 0;
                     return (
                       <button
-                        key={meal.name}
-                        className={`rf-meal ${
-                          selectedMeal === meal.name ? "selected" : ""
-                        }`}
+                        key={meal.id}
+                        className={`rf-meal ${selectedSlotId === meal.id ? "selected" : ""}`}
                         onClick={() => {
-                          setSelectedMeal(meal.name);
+                          setSelectedSlotId(meal.id);
                           setNotice("");
                         }}
+                        type="button"
                       >
                         <div style={{ flex: 1 }}>
                           <div className="rf-meal-name">
-                            <span className="rf-meal-symbol">
-                              {meal.icon}
-                            </span>
+                            <span className="rf-meal-symbol">{meal.icon}</span>
                             {meal.name}
                           </div>
-                          <small>{meal.time}</small>
-
-                          <div className="rf-progress">
-                            <div
-                              style={{
-                                width: `${Math.min(
-                                  100,
-                                  (count / meal.expected) * 100
-                                )}%`,
-                              }}
-                            />
-                          </div>
+                          <small>{meal.date} · {meal.time} · {meal.status}</small>
+                          <div className="rf-progress"><div style={{ width: `${progress}%` }} /></div>
                         </div>
-
-                        <div className="rf-meal-count">
-                          {count} / {meal.expected}
-                        </div>
+                        <div className="rf-meal-count">{meal.checkedIn} / {meal.expected}</div>
                       </button>
                     );
                   })}
@@ -1239,30 +1421,75 @@ export default function StaffPage() {
                   The verification chamber
                 </h2>
                 <p className="rf-section-subtitle">
-                  Attendance station · {selectedMeal}
+                  Attendance station · {currentMeal?.name || "No meal selected"}
                 </p>
                 <div className="rf-section-ornament">✧ CHECK-IN STATION</div>
 
                 <div className="rf-station">
-                  <div className="rf-arch">
-                    <span className="rf-arch-symbol">▦</span>
-                  </div>
+                  <div className="rf-arch"><span className="rf-arch-symbol">▦</span></div>
                   <strong>Sanctum Verification Station</strong>
                   <p>
-                    The designated dining-hall check-in point.
-                    QR scanning can be connected to the check-in API
-                    in a later step.
+                    {currentMeal
+                      ? `${currentMeal.name} · ${currentMeal.date} · ${currentMeal.time}`
+                      : "Select a meal slot to begin attendance management."}
+                    {currentMeal?.slot?.bookingLocked ? " Booking is locked for this slot." : ""}
                   </p>
                 </div>
 
-                <button className="rf-primary" onClick={simulateCheckIn}>
-                  ✧ &nbsp; Record demo check-in
-                </button>
+                <form className="rf-action-form" onSubmit={recordManualCheckIn}>
+                  <label htmlFor="staff-student-id">Manual check-in · Student ID</label>
+                  <input
+                    id="staff-student-id"
+                    className="rf-action-input"
+                    value={studentId}
+                    onChange={(event) => setStudentId(event.target.value)}
+                    placeholder="Enter the student's exact ID"
+                    required
+                    disabled={!selectedSlotId || busy}
+                  />
+                  <button className="rf-primary" type="submit" disabled={!selectedSlotId || !studentId.trim() || busy}>
+                    {busy ? "Please wait…" : "✧ Verify student and check in"}
+                  </button>
+                </form>
+
+                <form className="rf-action-form" onSubmit={recordQrCheckIn}>
+                  <label htmlFor="staff-qr-token">QR check-in · Paste scanned QR token</label>
+                  <input
+                    id="staff-qr-token"
+                    className="rf-action-input"
+                    value={qrToken}
+                    onChange={(event) => setQrToken(event.target.value)}
+                    placeholder="Paste the student's short-lived QR token"
+                    required
+                    disabled={!selectedSlotId || busy}
+                  />
+                  <button className="rf-secondary" type="submit" disabled={!selectedSlotId || !qrToken.trim() || busy}>
+                    Verify QR token
+                  </button>
+                </form>
 
                 <p className="rf-demo-note">
-                  Demo only: adds a sample student record. This does not
-                  scan or verify a real QR code.
+                  Check-in is verified by the backend. QR token entry is supported here; a camera-based QR reader is not included in this component.
                 </p>
+
+                <div className="rf-action-form">
+                  <div className="rf-section-ornament">✧ PORTIONS & LEFTOVERS</div>
+                  <form onSubmit={(event) => savePortions("prepared", event)}>
+                    <label htmlFor="prepared-portions">Prepared portions</label>
+                    <input id="prepared-portions" className="rf-action-input" type="number" min="0" step="1" value={preparedPortions} onChange={(event) => setPreparedPortions(event.target.value)} placeholder="Enter prepared portions" disabled={!selectedSlotId || busy} />
+                    <button className="rf-secondary" type="submit" disabled={!selectedSlotId || preparedPortions === "" || busy}>Save prepared portions</button>
+                  </form>
+                  <form onSubmit={(event) => savePortions("leftovers", event)}>
+                    <label htmlFor="leftover-portions">Leftover portions</label>
+                    <input id="leftover-portions" className="rf-action-input" type="number" min="0" step="1" value={leftoverPortions} onChange={(event) => setLeftoverPortions(event.target.value)} placeholder="Enter leftover portions" disabled={!selectedSlotId || busy} />
+                    <button className="rf-secondary" type="submit" disabled={!selectedSlotId || leftoverPortions === "" || busy}>Save leftovers</button>
+                  </form>
+                  {currentMeal?.slot?.preparedPortions != null && currentMeal?.slot?.recordedLeftovers != null && (
+                    <p className="rf-demo-note">
+                      Recorded waste: {currentMeal.slot.preparedPortions === 0 ? 0 : ((currentMeal.slot.recordedLeftovers / currentMeal.slot.preparedPortions) * 100).toFixed(2)}%
+                    </p>
+                  )}
+                </div>
               </div>
             </section>
           )}
@@ -1276,13 +1503,13 @@ export default function StaffPage() {
                     : "Recent check-ins"}
                 </h2>
                 <p className="rf-section-subtitle" style={{ margin: "4px 0 0" }}>
-                  Search sample records by name, student ID, or meal.
+                  Shows successful check-ins made during this page session. The current summary API returns counts, not a historical student list.
                 </p>
               </div>
 
               <input
                 className="rf-search"
-                placeholder="⌕  Search student or ID..."
+                placeholder="⌕  Search student ID or meal..."
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
               />
@@ -1301,10 +1528,10 @@ export default function StaffPage() {
                 <tbody>
                   {filteredCheckIns.length > 0 ? (
                     filteredCheckIns.map((item, index) => (
-                      <tr key={`${item.id}-${index}`}>
+                      <tr key={`${item.studentId}-${item.time}-${index}`}>
                         <td>
-                          <div className="rf-person">{item.name}</div>
-                          <div className="rf-id">{item.id}</div>
+                          <div className="rf-person">{item.studentId}</div>
+                          <div className="rf-id">Recorded in this session</div>
                         </td>
                         <td>{item.meal}</td>
                         <td>{item.time}</td>
@@ -1317,7 +1544,7 @@ export default function StaffPage() {
                     <tr>
                       <td colSpan="4">
                         <div className="rf-empty">
-                          No matching records found.
+                          No successful check-ins in this page session match your search.
                         </div>
                       </td>
                     </tr>
