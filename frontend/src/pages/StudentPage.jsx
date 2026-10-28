@@ -26,6 +26,7 @@ const NAV_ITEMS = [
   { label: "Today's Menu", icon: "♨" },
   { label: "My Activity", icon: "◷" },
   { label: "Rebate Requests", icon: "₹" },
+  { label: "Hall Points", icon: "✧" },
 ];
 
 function getSlotId(booking) {
@@ -75,6 +76,11 @@ export default function StudentPage() {
   const [rebateBookingId, setRebateBookingId] = useState("");
   const [rebateReason, setRebateReason] = useState("");
   const [rebateSubmitting, setRebateSubmitting] = useState(false);
+  const [pointsBalance, setPointsBalance] = useState(null);
+  const [pointsTotalTransactions, setPointsTotalTransactions] = useState(null);
+  const [pointsTransactions, setPointsTransactions] = useState([]);
+  const [pointsLoading, setPointsLoading] = useState(false);
+  const [pointsError, setPointsError] = useState("");
 
   useEffect(() => {
     const timer = window.setInterval(
@@ -133,11 +139,47 @@ export default function StudentPage() {
     }
   }, []);
 
+  const loadHallPoints = useCallback(async () => {
+    setPointsLoading(true);
+    setPointsError("");
+
+    try {
+      const [balanceResponse, historyResponse] = await Promise.all([
+        api.get("/points"),
+        api.get("/points/history"),
+      ]);
+
+      setPointsBalance(balanceResponse.data?.balance ?? 0);
+      setPointsTotalTransactions(
+        balanceResponse.data?.totalTransactions ??
+          historyResponse.data?.count ??
+          0
+      );
+      setPointsTransactions(
+        Array.isArray(historyResponse.data?.transactions)
+          ? historyResponse.data.transactions
+          : []
+      );
+    } catch (error) {
+      setPointsError(
+        errorMessage(error, "Could not load Hall Points. Please try again.")
+      );
+    } finally {
+      setPointsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (activeTab === "Rebate Requests") {
       loadMyRebates();
     }
   }, [activeTab, loadMyRebates]);
+
+  useEffect(() => {
+    if (activeTab === "Hall Points") {
+      loadHallPoints();
+    }
+  }, [activeTab, loadHallPoints]);
 
   async function submitRebateRequest(event) {
     event.preventDefault();
@@ -1001,7 +1043,7 @@ export default function StudentPage() {
           }
 
           .mm-nav {
-            grid-template-columns: repeat(5, minmax(0, 1fr));
+            grid-template-columns: repeat(6, minmax(0, 1fr));
             margin-top: 13px;
           }
 
@@ -1177,7 +1219,9 @@ export default function StudentPage() {
                       ? "Explore available meal slots and reserve your place at the Refectory."
                       : activeTab === "Rebate Requests"
                         ? "Request a rebate for a meal booking and track its status."
-                        : "A record of the meal reservations currently linked to your account."}
+                        : activeTab === "Hall Points"
+                          ? "Track your Hall Points balance and the transactions you have earned."
+                          : "A record of the meal reservations currently linked to your account."}
               </p>
             </div>
 
@@ -1609,6 +1653,150 @@ export default function StudentPage() {
                           </div>
                         </div>
                         <span className="mm-status">{rebate.status || "PENDING"}</span>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </section>
+          )}
+
+          {activeTab === "Hall Points" && (
+            <section>
+              <div className="mm-section-heading">
+                <div>
+                  <h2>Your Hall Points</h2>
+                  <p>
+                    Earn points through responsible meal bookings and attendance.
+                  </p>
+                </div>
+
+                <button
+                  className="mm-text-link"
+                  type="button"
+                  onClick={loadHallPoints}
+                  disabled={pointsLoading}
+                >
+                  {pointsLoading ? "Refreshing…" : "Refresh ↻"}
+                </button>
+              </div>
+
+              <div className="mm-stats" style={{ marginBottom: 22 }}>
+                <div className="mm-stat">
+                  <div className="mm-stat-label">Points balance</div>
+                  <div className="mm-stat-value">
+                    {pointsLoading && pointsBalance === null
+                      ? "…"
+                      : pointsBalance ?? "—"}
+                  </div>
+                  <div className="mm-stat-caption">Your current Hall Points</div>
+                </div>
+
+                <div className="mm-stat">
+                  <div className="mm-stat-label">Total transactions</div>
+                  <div className="mm-stat-value">
+                    {pointsLoading && pointsTotalTransactions === null
+                      ? "…"
+                      : pointsTotalTransactions ?? pointsTransactions.length}
+                  </div>
+                  <div className="mm-stat-caption">Recorded points transactions</div>
+                </div>
+
+                <div className="mm-stat">
+                  <div className="mm-stat-label">How to earn</div>
+                  <div
+                    style={{
+                      color: "#c6c1af",
+                      fontSize: 11,
+                      lineHeight: 1.9,
+                      marginTop: 10,
+                    }}
+                  >
+                    Early cancellation: +2
+                    <br />
+                    Successful check-in: +1
+                    <br />
+                    No-show: −2
+                  </div>
+                </div>
+              </div>
+
+              {pointsError && (
+                <div className="mm-notice error" role="alert">
+                  {pointsError}
+                </div>
+              )}
+
+              <div className="mm-section-heading">
+                <div>
+                  <h2>Points history</h2>
+                  <p>Your latest recorded Hall Points transactions.</p>
+                </div>
+              </div>
+
+              <div className="mm-list-panel">
+                {pointsLoading ? (
+                  <div className="mm-empty">Loading your points history…</div>
+                ) : pointsError ? (
+                  <div className="mm-empty">
+                    Could not load points history. Use Refresh to try again.
+                  </div>
+                ) : pointsTransactions.length === 0 ? (
+                  <div className="mm-empty">
+                    No points transactions recorded yet. Your history will appear
+                    here when points are awarded.
+                  </div>
+                ) : (
+                  pointsTransactions.map((transaction, index) => {
+                    const reasonLabels = {
+                      EARLY_CANCELLATION: "Early meal cancellation",
+                      SUCCESSFUL_REDEMPTION: "Successful QR check-in",
+                      NO_SHOW: "Missed meal (no-show)",
+                      SURPLUS_COLLECTION: "Surplus meal collection",
+                    };
+                    const points = Number(transaction.points) || 0;
+                    const transactionId =
+                      transaction._id || transaction.referenceKey || `${transaction.reason}-${transaction.createdAt}-${index}`;
+
+                    return (
+                      <div className="mm-booking-row" key={transactionId}>
+                        <div className="mm-booking-left">
+                          <div className="mm-booking-emoji">
+                            {points > 0 ? "✧" : "−"}
+                          </div>
+                          <div>
+                            <strong>
+                              {reasonLabels[transaction.reason] ||
+                                transaction.reason ||
+                                "Points transaction"}
+                            </strong>
+                            <small>
+                              {transaction.createdAt
+                                ? new Date(transaction.createdAt).toLocaleString(
+                                    "en-IN",
+                                    {
+                                      day: "numeric",
+                                      month: "short",
+                                      year: "numeric",
+                                      hour: "numeric",
+                                      minute: "2-digit",
+                                    }
+                                  )
+                                : "Date unavailable"}
+                            </small>
+                          </div>
+                        </div>
+
+                        <span
+                          className="mm-status"
+                          style={{
+                            color: points > 0 ? "#c9e2b5" : "#ffc4b4",
+                            background: points > 0 ? "#85a96820" : "#8e3d3022",
+                          }}
+                        >
+                          {points > 0 ? "+" : ""}
+                          {points}
+                        </span>
                       </div>
                     );
                   })
