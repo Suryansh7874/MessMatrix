@@ -11,7 +11,7 @@ import { notFound, errorHandler } from "./middleware/error.middleware.js";
 import attendanceRoutes from "./routes/attendance.routes.js";
 import analyticsRoutes from "./routes/analytics.routes.js";
 import rebateRoutes from "./routes/rebate.routes.js";
-
+import pointRoutes from "./routes/point.routes.js";
 
 const app = express();
 app.use(helmet());
@@ -30,6 +30,7 @@ app.use("/api/admin", adminRoutes);
 app.use("/api/attendance", attendanceRoutes);
 app.use("/api/analytics", analyticsRoutes);
 app.use("/api/rebates", rebateRoutes);  
+app.use("/api/points", pointRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

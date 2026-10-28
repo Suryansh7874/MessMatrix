@@ -5,6 +5,7 @@ import Booking from "../models/Booking.js";
 import MealSlot from "../models/MealSlot.js";
 import QRToken from "../models/QRToken.js";
 import CheckIn from "../models/CheckIn.js";
+import { awardPoints } from "./point.service.js";
 
 import {
   BookingStatus,
@@ -158,8 +159,8 @@ export async function validateAndCheckIn({
   try {
     const actualEventId =
       typeof eventId === "string" && eventId.trim()
-        ? eventId
-        : crypto.randomUUID();
+        ? eventId.trim()
+        : `qr:${claimedToken._id}`;
 
     const checkIn = await CheckIn.create({
       qrTokenId: String(claimedToken._id),
@@ -171,6 +172,14 @@ export async function validateAndCheckIn({
       deviceId: null,
       scannedAt: now,
       eventId: actualEventId,
+    });
+
+    await awardPoints({
+      studentId: String(updatedBooking.studentId),
+      mealSlotId: String(slot._id),
+      bookingId: String(updatedBooking._id),
+      reason: "SUCCESSFUL_REDEMPTION",
+      referenceKey: `redeem:${updatedBooking._id}`,
     });
 
     return {

@@ -8,10 +8,12 @@ import { BookingStatus, SlotStatus } from "../utils/enums.js";
 import {  generateMealQR} from "../services/qr.service.js";
 
 import { validateAndCheckIn } from "../services/checkin.service.js";
+
+
 const checkInSchema = z.object({
   studentId: z.string().trim().min(1),
 });
-
+const mealSlotIdSchema = z.string().uuid();
 const portionsSchema = z.object({
   portions: z.number().int().min(0),
 });
@@ -122,11 +124,11 @@ export async function getAttendanceSummary(req, res, next) {
   try {
     const { mealSlotId } = req.params;
 
-    if (!isValidObjectId(mealSlotId)) {
-      return res.status(400).json({
-        message: "Invalid meal slot ID.",
-      });
-    }
+    if (!mealSlotIdSchema.safeParse(mealSlotId).success) {
+    return res.status(400).json({
+      message: "Invalid meal slot ID.",
+    });
+  }
 
     const slot = await MealSlot.findById(mealSlotId);
 
@@ -303,11 +305,11 @@ export async function generateMealQrToken(req, res, next) {
   try {
     const { mealSlotId } = req.params;
 
-    if (!isValidObjectId(mealSlotId)) {
-      return res.status(400).json({
-        message: "Invalid meal slot ID.",
-      });
-    }
+    if (!mealSlotIdSchema.safeParse(mealSlotId).success) {
+  return res.status(400).json({
+    message: "Invalid meal slot ID.",
+  });
+}
 
     const result = await generateMealQR({
       studentId: req.user.id,
@@ -395,11 +397,11 @@ export async function getMealSlotAttendance(req, res, next) {
   try {
     const { mealSlotId } = req.params;
 
-    if (!isValidObjectId(mealSlotId)) {
-      return res.status(400).json({
-        message: "Invalid meal slot ID.",
-      });
-    }
+    if (!mealSlotIdSchema.safeParse(mealSlotId).success) {
+  return res.status(400).json({
+    message: "Invalid meal slot ID.",
+  });
+}
 
     const slot = await MealSlot.findById(mealSlotId).lean();
 

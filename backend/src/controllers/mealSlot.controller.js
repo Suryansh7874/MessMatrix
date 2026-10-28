@@ -18,11 +18,20 @@ export async function createMealSlot(req, res, next) {
   try {
     const parsed = createSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ message: "Invalid meal slot", errors: parsed.error.issues });
-    const data = parsed.data;
+    // const data = parsed.data;
     const startTime = new Date(data.startTime);
     const endTime = new Date(data.endTime);
     const cutoffTime = new Date(data.cutoffTime);
     const now = new Date();
+    const date = new Date(data.date);
+
+    if (
+      date.toDateString() !== startTime.toDateString()
+    ) {
+      return res.status(400).json({
+        message: "Meal date must match the service start date.",
+      });
+    }
     if (startTime <= now || cutoffTime <= now || cutoffTime >= startTime || endTime <= startTime) {
       return res.status(400).json({ message: "Times must be valid: cutoff < start < end, and service must be in the future." });
     }
@@ -48,7 +57,15 @@ export async function getHeadcount(req, res, next) {
   try {
     const slot = await MealSlot.findById(req.params.mealSlotId);
     if (!slot) return res.status(404).json({ message: "Meal slot not found." });
-    const headcount = await Booking.countDocuments({ mealSlotId: slot._id, status: BookingStatus.OPTED_IN });
+    const headcount = await Booking.countDocuments({
+      mealSlotId: slot._id,
+      status: {
+        $in: [
+          BookingStatus.OPTED_IN,
+          BookingStatus.CHECKED_IN,
+        ],
+      },
+    });
     return res.json({ mealSlotId: slot._id, finalHeadcount: slot.finalHeadcount, currentOptedInCount: headcount, bookingLocked: slot.bookingLocked });
   } catch (error) { next(error); }
 }
