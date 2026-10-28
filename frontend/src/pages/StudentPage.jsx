@@ -1,7 +1,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import api from "../services/api";
-
+import { QRCodeSVG } from "qrcode.react";
 const MEAL_DETAILS = {
   BREAKFAST: {
     name: "Breakfast",
@@ -26,7 +26,6 @@ const NAV_ITEMS = [
   { label: "Today's Menu", icon: "♨" },
   { label: "My Activity", icon: "◷" },
 ];
-
 function getSlotId(booking) {
   const value = booking?.mealSlotId;
   return typeof value === "object" ? value?._id : value;
@@ -69,6 +68,54 @@ export default function StudentPage() {
   const [clock, setClock] = useState(new Date());
   const [loading, setLoading] = useState(true);
   const [busySlotId, setBusySlotId] = useState("");
+  const [qrData, setQrData] = useState(null);
+  const [qrLoading, setQrLoading] = useState(false);
+
+ 
+async function generateQR(booking) {
+  if (!booking?._id || qrLoading) return;
+
+  const mealSlotId =
+    typeof booking.mealSlotId === "object"
+      ? booking.mealSlotId?._id
+      : booking.mealSlotId;
+
+  if (!mealSlotId) {
+    setNoticeType("error");
+    setNotice("Could not find the meal slot for this booking.");
+    return;
+  }
+
+  setQrLoading(true);
+  setNotice("");
+
+  try {
+    const response = await api.post(
+      `/attendance/meal-slots/${encodeURIComponent(mealSlotId)}/qr-token`
+    );
+
+    if (!response.data?.token) {
+      throw new Error("The server did not return a QR token.");
+    }
+
+    setQrData({
+      token: response.data.token,
+      mealSlotId: response.data.mealSlotId,
+      expiresAt: response.data.expiresAt,
+    });
+  } catch (error) {
+    setNoticeType("error");
+    setNotice(
+      errorMessage(
+        error,
+        "Could not generate your meal QR code."
+      )
+    );
+  } finally {
+    setQrLoading(false);
+  }
+}
+
 
   useEffect(() => {
     const timer = window.setInterval(
@@ -365,19 +412,31 @@ export default function StudentPage() {
         </div>
 
         {activity ? (
-          <span className="mm-status">Booked</span>
-        ) : (
-          <button
-            className="mm-cancel-button"
-            type="button"
-            disabled={busySlotId === meal.id}
-            onClick={() => cancelMeal(booking)}
-          >
-            {busySlotId === meal.id
-              ? "Please wait…"
-              : "Cancel"}
-          </button>
-        )}
+  <span className="mm-status">Booked</span>
+) : (
+  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+    <button
+      className="mm-primary-button"
+      type="button"
+      disabled={
+        qrLoading ||
+        booking.status !== "OPTED_IN"
+      }
+      onClick={() => generateQR(booking)}
+    >
+      Generate QR
+    </button>
+
+    <button
+      className="mm-cancel-button"
+      type="button"
+      disabled={busySlotId === meal.id}
+      onClick={() => cancelMeal(booking)}
+    >
+      Cancel
+    </button>
+  </div>
+)}
       </div>
     );
   }
@@ -1155,6 +1214,82 @@ export default function StudentPage() {
             </div>
           )}
 
+          {qrData && (
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="mm-qr-title"
+              style={{
+                position: "fixed",
+                inset: 0,
+                zIndex: 1000,
+                display: "grid",
+                placeItems: "center",
+                padding: 20,
+                background: "rgba(0,0,0,.76)",
+                backdropFilter: "blur(8px)",
+              }}
+              onClick={(event) => {
+                if (event.target === event.currentTarget) setQrData(null);
+              }}
+            >
+              <section
+                style={{
+                  width: "min(100%, 390px)",
+                  padding: 26,
+                  borderRadius: 22,
+                  border: "1px solid rgba(212,179,106,.5)",
+                  background: "linear-gradient(155deg, #26332e, #111a19)",
+                  boxShadow: "0 25px 90px rgba(0,0,0,.5)",
+                  textAlign: "center",
+                  color: "#f4ead4",
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                  <span style={{ color: "#d9bb78", fontSize: 10, letterSpacing: ".16em", fontWeight: 800 }}>
+                    MESSMATRIX · MEAL PASS
+                  </span>
+                  <button
+                    type="button"
+                    aria-label="Close QR code"
+                    onClick={() => setQrData(null)}
+                    style={{ border: 0, background: "transparent", color: "#f4ead4", fontSize: 24, cursor: "pointer" }}
+                  >
+                    ×
+                  </button>
+                </div>
+                <h2 id="mm-qr-title" style={{ fontFamily: "Cinzel, serif", fontSize: 23, margin: "18px 0 6px" }}>
+                  Your Meal QR
+                </h2>
+                <p style={{ color: "#b7b4a5", fontSize: 12, margin: "0 0 20px" }}>
+                  Show this code to Mess Staff at the meal counter.
+                </p>
+                <div style={{ display: "inline-flex", padding: 16, background: "#fff", borderRadius: 14 }}>
+                  <QRCodeSVG value={qrData.token} size={220} level="M" includeMargin />
+                </div>
+                <p style={{ color: "#f0d38e", fontSize: 13, fontWeight: 800, margin: "18px 0 5px" }}>
+                  {qrData.mealName}
+                </p>
+                <p style={{ color: "#c6c1af", fontSize: 11, margin: 0 }}>
+                  {qrData.expiresAt
+                    ? `Expires at ${new Date(qrData.expiresAt).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" })}`
+                    : "This QR code is temporary. Use it promptly."}
+                </p>
+                <p style={{ color: "#a9a592", fontSize: 10, lineHeight: 1.6, margin: "12px 0 0" }}>
+                  Keep this QR private. It can be used only once and may expire shortly.
+                </p>
+                <button
+                  className="mm-primary-button"
+                  type="button"
+                  style={{ marginTop: 20 }}
+                  onClick={() => setQrData(null)}
+                >
+                  Done
+                </button>
+              </section>
+            </div>
+          )}
+
           {activeTab === "Overview" && (
             <>
               <section
@@ -1228,7 +1363,6 @@ export default function StudentPage() {
                 ) : (
                   <div className="mm-meal-grid">
                     {meals
-                      .slice(0, 3)
                       .map((meal) => (
                         <MealCard
                           key={meal.id}
@@ -1270,7 +1404,6 @@ export default function StudentPage() {
                     </div>
                   ) : (
                     activeBookings
-                      .slice(0, 3)
                       .map((booking) => (
                         <BookingRow
                           key={booking._id}
