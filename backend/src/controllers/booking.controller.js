@@ -3,10 +3,10 @@ import { z } from "zod";
 
 import MealSlot from "../models/MealSlot.js";
 import Booking from "../models/Booking.js";
-import { BookingStatus } from "../utils/enums.js";
-import {
-  cancelBookingAndIssueFullRebate,
-} from "../services/rebate.service.js";
+import Menu from "../models/Menu.js";
+import BillingLedger from "../models/BillingLedger.js";
+import { BookingStatus, LedgerType } from "../utils/enums.js";
+import { cancelBookingAndIssueFullRebate } from "../services/rebate.service.js";
 
 const choiceSchema = z.object({
   status: z.enum(["OPTED_IN", "OPTED_OUT", "CANCELLED"]),
@@ -26,8 +26,7 @@ export async function setBooking(req, res, next) {
     const mealSlotId = req.params.mealSlotId;
     const newStatus = parsed.data.status;
 
-
-    // Cancellation and rebate are handled by the rebate service.
+    // Preserve existing cancellation and rebate behavior.
     if (newStatus === BookingStatus.CANCELLED) {
       const result = await cancelBookingAndIssueFullRebate({
         studentId,
@@ -69,9 +68,8 @@ export async function setBooking(req, res, next) {
       },
     };
 
-    // Standalone MongoDB compatible: no sessions or transactions.
+    // Verify the meal slot is still open before changing a booking.
     const performUpdate = async (upsert) => {
-      // Atomically verify that booking changes are still allowed.
       const slot = await MealSlot.findOneAndUpdate(
         {
           _id: mealSlotId,
@@ -79,12 +77,8 @@ export async function setBooking(req, res, next) {
           bookingLocked: false,
           cutoffTime: { $gt: now },
         },
-        {
-          $set: { updatedAt: now },
-        },
-        {
-          new: true,
-        }
+        { $set: { updatedAt: now } },
+        { new: true }
       );
 
       if (!slot) {
@@ -146,12 +140,74 @@ export async function setBooking(req, res, next) {
         throw error;
       }
 
-      // Another request may have created the unique booking first.
-      // Retry as an update without inserting another document.
+      // If another request inserted the booking first, update it instead.
       result = await performUpdate(false);
     }
 
-    return res.status(result.httpStatus).json(result.body);
+    if (result.httpStatus !== 200) {
+      return res.status(result.httpStatus).json(result.body);
+    }
+
+    // Add one charge for each successful OPTED_IN booking.
+    if (newStatus === BookingStatus.OPTED_IN) {
+      const slot = await MealSlot.findById(mealSlotId).select("menuId");
+
+      if (!slot) {
+        return res.status(404).json({
+          message: "Meal slot not found.",
+        });
+      }
+
+      const menu = await Menu.findById(slot.menuId).select("price name");
+
+      if (!menu || menu.price == null) {
+        return res.status(500).json({
+          message:
+            "Booking was saved, but the meal price could not be found. Please retry or contact the mess administrator.",
+        });
+      }
+
+      const booking = result.body.booking;
+      const referenceId = `charge:${booking._id}`;
+
+      // Stable referenceId prevents duplicate charge entries on retries.
+      const ledgerEntry = await BillingLedger.findOneAndUpdate(
+        { referenceId },
+        {
+          $setOnInsert: {
+            studentId,
+            mealSlotId,
+            bookingId: booking._id,
+            type: LedgerType.CHARGE,
+            amount: menu.price,
+            reason: `Meal charge: ${menu.name || "meal booking"}`,
+            date: now,
+            referenceId,
+          },
+        },
+        {
+          new: true,
+          upsert: true,
+          runValidators: true,
+          setDefaultsOnInsert: true,
+        }
+      );
+
+      // Verify the ledger entry belongs to this booking and student.
+      if (
+        !ledgerEntry ||
+        ledgerEntry.studentId !== studentId ||
+        ledgerEntry.bookingId !== booking._id ||
+        ledgerEntry.type !== LedgerType.CHARGE
+      ) {
+        return res.status(409).json({
+          message:
+            "Booking was saved, but its billing entry could not be verified. Please contact the mess administrator.",
+        });
+      }
+    }
+
+    return res.status(200).json(result.body);
   } catch (error) {
     next(error);
   }

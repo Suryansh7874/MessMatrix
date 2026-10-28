@@ -50,6 +50,7 @@ export default function MessAdmin() {
     name: "",
     time: "",
     menu: "",
+    price: "0",
     capacity: "200",
   });
   const [loadingData, setLoadingData] = useState(true);
@@ -58,6 +59,8 @@ export default function MessAdmin() {
     const timer = setInterval(() => setClock(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  // Load registered staff from the database whenever the dashboard opens.
   useEffect(() => {
     let cancelled = false;
 
@@ -73,14 +76,14 @@ export default function MessAdmin() {
 
         setStaff(
           staffRecords.map((member) => ({
-            id: member._id,
-            name: member.name,
-            email: member.email,
+            id: member._id ?? member.id,
+            name: member.name ?? "",
+            email: member.email ?? "",
             employeeId: member.employeeId || "—",
             phone: "—",
-            role: member.role,
+            role: member.role ?? "MESS_STAFF",
             shift: "Not assigned",
-            active: member.isActive,
+            active: member.isActive ?? true,
           }))
         );
       } catch (error) {
@@ -148,6 +151,7 @@ export default function MessAdmin() {
             name: String(slot.mealType ?? "Meal").charAt(0) + String(slot.mealType ?? "Meal").slice(1).toLowerCase(),
             time: `${formatTime(new Date(slot.startTime))} – ${formatTime(new Date(slot.endTime))}`,
             menu: menu?.description || menu?.name || "Menu details unavailable",
+            price: Number(menu?.price?.$numberDecimal ?? menu?.price ?? 0),
             capacity: Number(slot.preparedPortions ?? slot.finalHeadcount ?? 0),
             booked: Number(headcount.currentOptedInCount ?? 0),
             open: slot.status === "OPEN" && !slot.bookingLocked && new Date(slot.cutoffTime) > new Date(),
@@ -298,6 +302,16 @@ export default function MessAdmin() {
       return;
     }
 
+    const price = Number(mealForm.price);
+    if (
+      mealForm.price.trim() === "" ||
+      !Number.isFinite(price) ||
+      price < 0
+    ) {
+      notify("Enter a valid meal price of ₹0 or more.");
+      return;
+    }
+
     const mealText = `${mealForm.name} ${mealForm.menu}`.toLowerCase();
     const mealType = mealText.includes("breakfast")
       ? "BREAKFAST"
@@ -326,7 +340,7 @@ export default function MessAdmin() {
         description: mealForm.menu.trim(),
         mealType,
         date: serviceWindow.start.toISOString(),
-        price: 0,
+        price,
         imageUrl: "",
       });
 
@@ -339,7 +353,7 @@ export default function MessAdmin() {
         cutoffTime: serviceWindow.cutoff.toISOString(),
       });
 
-      setMealForm({ name: "", time: "", menu: "", capacity: "200" });
+      setMealForm({ name: "", time: "", menu: "", price: "0", capacity: "200" });
       setShowMealForm(false);
       notify("Meal slot created. Capacity is not stored by the current backend model.");
 
@@ -365,6 +379,7 @@ export default function MessAdmin() {
           name: String(slot.mealType ?? "Meal").charAt(0) + String(slot.mealType ?? "Meal").slice(1).toLowerCase(),
           time: `${formatTime(new Date(slot.startTime))} – ${formatTime(new Date(slot.endTime))}`,
           menu: menu?.description || menu?.name || "Menu details unavailable",
+          price: Number(menu?.price?.$numberDecimal ?? menu?.price ?? 0),
           capacity: Number(slot.preparedPortions ?? slot.finalHeadcount ?? 0),
           booked: Number(count.currentOptedInCount ?? 0),
           open: slot.status === "OPEN" && !slot.bookingLocked && new Date(slot.cutoffTime) > new Date(),
@@ -2006,7 +2021,7 @@ export default function MessAdmin() {
             {showMealForm && (
               <form className="mm-form-panel" onSubmit={addMeal}>
                 <h3>✧ Inscribe a New Meal Session</h3>
-                <p>Set the meal's name, serving time, menu, and seating capacity.</p>
+                <p>Set the meal's name, serving time, menu, price, and seating capacity.</p>
                 <div className="mm-form-grid">
                   <Field label="Meal name" full>
                     <input className="mm-input" required placeholder="e.g. Special Dinner" value={mealForm.name} onChange={(e) => setMealForm({ ...mealForm, name: e.target.value })} />
@@ -2016,6 +2031,9 @@ export default function MessAdmin() {
                   </Field>
                   <Field label="Maximum capacity">
                     <input className="mm-input" required type="number" min="1" value={mealForm.capacity} onChange={(e) => setMealForm({ ...mealForm, capacity: e.target.value })} />
+                  </Field>
+                  <Field label="Meal price (₹)">
+                    <input className="mm-input" required type="number" min="0" step="0.01" inputMode="decimal" placeholder="e.g. 60.00" value={mealForm.price} onChange={(e) => setMealForm({ ...mealForm, price: e.target.value })} />
                   </Field>
                   <Field label="Menu details" full>
                     <textarea className="mm-textarea" rows="2" placeholder="Enter planned menu items" value={mealForm.menu} onChange={(e) => setMealForm({ ...mealForm, menu: e.target.value })} />
@@ -2039,6 +2057,9 @@ export default function MessAdmin() {
                     <StatusPill status={meal.open ? "Open" : "Closed"} />
                   </div>
                   <p>{meal.menu}</p>
+                  <p style={{ color: "var(--mm-gold-bright)", fontWeight: 600 }}>
+                    Price: ₹{Number.isFinite(Number(meal.price)) ? Number(meal.price).toFixed(2) : "0.00"}
+                  </p>
                   <div className="mm-meal-progress">
                     <div style={{ width: `${Math.min(100, (meal.booked / meal.capacity) * 100)}%` }} />
                   </div>

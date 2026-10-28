@@ -27,6 +27,7 @@ const NAV_ITEMS = [
   { label: "My Activity", icon: "◷" },
   { label: "Rebate Requests", icon: "₹" },
   { label: "Hall Points", icon: "✧" },
+  { label: "Billing History", icon: "₹" },
 ];
 
 function getSlotId(booking) {
@@ -81,6 +82,9 @@ export default function StudentPage() {
   const [pointsTransactions, setPointsTransactions] = useState([]);
   const [pointsLoading, setPointsLoading] = useState(false);
   const [pointsError, setPointsError] = useState("");
+  const [billingLedger, setBillingLedger] = useState([]);
+  const [billingLoading, setBillingLoading] = useState(false);
+  const [billingError, setBillingError] = useState("");
 
   useEffect(() => {
     const timer = window.setInterval(
@@ -180,6 +184,30 @@ export default function StudentPage() {
       loadHallPoints();
     }
   }, [activeTab, loadHallPoints]);
+
+  const loadBillingLedger = useCallback(async () => {
+    setBillingLoading(true);
+    setBillingError("");
+
+    try {
+      const response = await api.get("/rebates/my-ledger");
+      setBillingLedger(
+        Array.isArray(response.data?.ledger) ? response.data.ledger : []
+      );
+    } catch (error) {
+      setBillingError(
+        errorMessage(error, "Could not load your billing history. Please try again.")
+      );
+    } finally {
+      setBillingLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === "Billing History") {
+      loadBillingLedger();
+    }
+  }, [activeTab, loadBillingLedger]);
 
   async function submitRebateRequest(event) {
     event.preventDefault();
@@ -1043,7 +1071,7 @@ export default function StudentPage() {
           }
 
           .mm-nav {
-            grid-template-columns: repeat(6, minmax(0, 1fr));
+            grid-template-columns: repeat(7, minmax(0, 1fr));
             margin-top: 13px;
           }
 
@@ -1221,7 +1249,9 @@ export default function StudentPage() {
                         ? "Request a rebate for a meal booking and track its status."
                         : activeTab === "Hall Points"
                           ? "Track your Hall Points balance and the transactions you have earned."
-                          : "A record of the meal reservations currently linked to your account."}
+                          : activeTab === "Billing History"
+                            ? "Review meal charges, rebate credits, refunds, and other billing entries."
+                            : "A record of the meal reservations currently linked to your account."}
               </p>
             </div>
 
@@ -1653,6 +1683,95 @@ export default function StudentPage() {
                           </div>
                         </div>
                         <span className="mm-status">{rebate.status || "PENDING"}</span>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </section>
+          )}
+
+          {activeTab === "Billing History" && (
+            <section>
+              <div className="mm-section-heading">
+                <div>
+                  <h2>Your billing ledger</h2>
+                  <p>Charges and credits recorded for your meal bookings.</p>
+                </div>
+                <button
+                  className="mm-text-link"
+                  type="button"
+                  onClick={loadBillingLedger}
+                  disabled={billingLoading}
+                >
+                  {billingLoading ? "Refreshing…" : "Refresh ↻"}
+                </button>
+              </div>
+
+              {billingError && (
+                <div className="mm-notice error" role="alert">
+                  {billingError}
+                </div>
+              )}
+
+              <div className="mm-list-panel">
+                {billingLoading ? (
+                  <div className="mm-empty">Loading billing history…</div>
+                ) : billingError ? (
+                  <div className="mm-empty">
+                    Could not load billing history. Use Refresh to try again.
+                  </div>
+                ) : billingLedger.length === 0 ? (
+                  <div className="mm-empty">
+                    No billing entries recorded yet. Meal charges and credits will appear here when recorded.
+                  </div>
+                ) : (
+                  billingLedger.map((entry, index) => {
+                    const amount =
+                      entry.amount?.$numberDecimal ?? entry.amount ?? "0";
+                    const isCredit = [
+                      "REBATE_CREDIT",
+                      "REFUND",
+                    ].includes(entry.type);
+                    const entryId =
+                      entry._id ||
+                      entry.referenceId ||
+                      `${entry.type}-${entry.date}-${index}`;
+
+                    return (
+                      <div className="mm-booking-row" key={entryId}>
+                        <div className="mm-booking-left">
+                          <div className="mm-booking-emoji">
+                            {isCredit ? "↙" : entry.type === "CHARGE" ? "₹" : "↔"}
+                          </div>
+                          <div>
+                            <strong>
+                              {entry.type === "CHARGE"
+                                ? "Meal charge"
+                                : entry.type === "REBATE_CREDIT"
+                                  ? "Rebate credit"
+                                  : entry.type === "REFUND"
+                                    ? "Refund"
+                                    : entry.type === "ADJUSTMENT"
+                                      ? "Billing adjustment"
+                                      : entry.type || "Billing entry"}
+                            </strong>
+                            <small>{entry.reason || "No description provided"}</small>
+                            <small>
+                              {formatDate(entry.date || entry.createdAt)}
+                              {entry.bookingId ? ` · Booking ${String(entry.bookingId).slice(0, 8)}` : ""}
+                            </small>
+                          </div>
+                        </div>
+                        <span
+                          className="mm-status"
+                          style={{
+                            color: isCredit ? "#c9e2b5" : "#f0d38e",
+                            background: isCredit ? "#85a96820" : "#c49b3d20",
+                          }}
+                        >
+                          {isCredit ? "+" : entry.type === "CHARGE" ? "−" : ""}₹{String(amount)}
+                        </span>
                       </div>
                     );
                   })
