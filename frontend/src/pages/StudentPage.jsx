@@ -25,6 +25,9 @@ const NAV_ITEMS = [
   { label: "My Bookings", icon: "▤" },
   { label: "Today's Menu", icon: "♨" },
   { label: "My Activity", icon: "◷" },
+  { label: "Rebate Requests", icon: "₹" },
+  { label: "Hall Points", icon: "✧" },
+  { label: "Billing History", icon: "₹" },
 ];
 function getSlotId(booking) {
   const value = booking?.mealSlotId;
@@ -116,6 +119,19 @@ async function generateQR(booking) {
   }
 }
 
+  const [rebates, setRebates] = useState([]);
+  const [rebatesLoading, setRebatesLoading] = useState(false);
+  const [rebateBookingId, setRebateBookingId] = useState("");
+  const [rebateReason, setRebateReason] = useState("");
+  const [rebateSubmitting, setRebateSubmitting] = useState(false);
+  const [pointsBalance, setPointsBalance] = useState(null);
+  const [pointsTotalTransactions, setPointsTotalTransactions] = useState(null);
+  const [pointsTransactions, setPointsTransactions] = useState([]);
+  const [pointsLoading, setPointsLoading] = useState(false);
+  const [pointsError, setPointsError] = useState("");
+  const [billingLedger, setBillingLedger] = useState([]);
+  const [billingLoading, setBillingLoading] = useState(false);
+  const [billingError, setBillingError] = useState("");
 
   useEffect(() => {
     const timer = window.setInterval(
@@ -159,6 +175,118 @@ async function generateQR(booking) {
     const response = await api.get("/bookings/my");
     setBookings(response.data?.bookings ?? []);
   }, []);
+
+  const loadMyRebates = useCallback(async () => {
+    setRebatesLoading(true);
+
+    try {
+      const response = await api.get("/rebates/my-rebates");
+      setRebates(response.data?.rebates ?? []);
+    } catch (error) {
+      setNoticeType("error");
+      setNotice(errorMessage(error, "Could not load your rebate requests."));
+    } finally {
+      setRebatesLoading(false);
+    }
+  }, []);
+
+  const loadHallPoints = useCallback(async () => {
+    setPointsLoading(true);
+    setPointsError("");
+
+    try {
+      const [balanceResponse, historyResponse] = await Promise.all([
+        api.get("/points"),
+        api.get("/points/history"),
+      ]);
+
+      setPointsBalance(balanceResponse.data?.balance ?? 0);
+      setPointsTotalTransactions(
+        balanceResponse.data?.totalTransactions ??
+          historyResponse.data?.count ??
+          0
+      );
+      setPointsTransactions(
+        Array.isArray(historyResponse.data?.transactions)
+          ? historyResponse.data.transactions
+          : []
+      );
+    } catch (error) {
+      setPointsError(
+        errorMessage(error, "Could not load Hall Points. Please try again.")
+      );
+    } finally {
+      setPointsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === "Rebate Requests") {
+      loadMyRebates();
+    }
+  }, [activeTab, loadMyRebates]);
+
+  useEffect(() => {
+    if (activeTab === "Hall Points") {
+      loadHallPoints();
+    }
+  }, [activeTab, loadHallPoints]);
+
+  const loadBillingLedger = useCallback(async () => {
+    setBillingLoading(true);
+    setBillingError("");
+
+    try {
+      const response = await api.get("/rebates/my-ledger");
+      setBillingLedger(
+        Array.isArray(response.data?.ledger) ? response.data.ledger : []
+      );
+    } catch (error) {
+      setBillingError(
+        errorMessage(error, "Could not load your billing history. Please try again.")
+      );
+    } finally {
+      setBillingLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === "Billing History") {
+      loadBillingLedger();
+    }
+  }, [activeTab, loadBillingLedger]);
+
+  async function submitRebateRequest(event) {
+    event.preventDefault();
+
+    if (!rebateBookingId || !rebateReason.trim()) {
+      setNoticeType("error");
+      setNotice("Select a booking and enter a reason.");
+      return;
+    }
+
+    setRebateSubmitting(true);
+    setNotice("");
+
+    try {
+      await api.post("/rebates", {
+        bookingId: rebateBookingId,
+        reason: rebateReason.trim(),
+      });
+
+      setRebateBookingId("");
+      setRebateReason("");
+      await loadMyRebates();
+
+      setNoticeType("success");
+      setNotice("Your rebate request was submitted successfully.");
+    } catch (error) {
+      setNoticeType("error");
+      setNotice(errorMessage(error, "Could not submit the rebate request."));
+    } finally {
+      setRebateSubmitting(false);
+    }
+  }
 
   const meals = useMemo(() => {
     return mealSlots
@@ -1002,7 +1130,7 @@ async function generateQR(booking) {
           }
 
           .mm-nav {
-            grid-template-columns: repeat(4, minmax(0, 1fr));
+            grid-template-columns: repeat(7, minmax(0, 1fr));
             margin-top: 13px;
           }
 
@@ -1176,7 +1304,13 @@ async function generateQR(booking) {
                     ? "Review your active meal reservations and cancel before the booking cutoff."
                     : activeTab === "Today's Menu"
                       ? "Explore available meal slots and reserve your place at the Refectory."
-                      : "A record of the meal reservations currently linked to your account."}
+                      : activeTab === "Rebate Requests"
+                        ? "Request a rebate for a meal booking and track its status."
+                        : activeTab === "Hall Points"
+                          ? "Track your Hall Points balance and the transactions you have earned."
+                          : activeTab === "Billing History"
+                            ? "Review meal charges, rebate credits, refunds, and other billing entries."
+                            : "A record of the meal reservations currently linked to your account."}
               </p>
             </div>
 
@@ -1538,6 +1672,386 @@ async function generateQR(booking) {
                       activity
                     />
                   ))
+                )}
+              </div>
+            </section>
+          )}
+
+          {activeTab === "Rebate Requests" && (
+            <section>
+              <div className="mm-section-heading">
+                <div>
+                  <h2>Request a rebate</h2>
+                  <p>Select a booking and explain why you are requesting a rebate.</p>
+                </div>
+                <button
+                  className="mm-text-link"
+                  type="button"
+                  onClick={loadMyRebates}
+                  disabled={rebatesLoading}
+                >
+                  {rebatesLoading ? "Refreshing…" : "Refresh ↻"}
+                </button>
+              </div>
+
+              <div className="mm-list-panel" style={{ padding: 18 }}>
+                <form onSubmit={submitRebateRequest}>
+                  <div style={{ marginBottom: 16 }}>
+                    <label
+                      htmlFor="rebate-booking"
+                      style={{ display: "block", marginBottom: 8, color: "#e9dfc7", fontSize: 12 }}
+                    >
+                      Select booking
+                    </label>
+                    <select
+                      id="rebate-booking"
+                      value={rebateBookingId}
+                      onChange={(event) => setRebateBookingId(event.target.value)}
+                      required
+                      style={{
+                        width: "100%",
+                        padding: 12,
+                        borderRadius: 10,
+                        border: "1px solid rgba(209,174,103,.35)",
+                        background: "#17221f",
+                        color: "#f4ead4",
+                        font: "inherit",
+                      }}
+                    >
+                      <option value="">Choose a meal booking</option>
+                      {bookings
+                        .filter((booking) =>
+                          !booking.checkedInAt &&
+                          !rebates.some((rebate) => rebate.bookingId === booking._id)
+                        )
+                        .map((booking) => {
+                          const meal = getMealForBooking(booking);
+                          return (
+                            <option key={booking._id} value={booking._id}>
+                              {meal
+                                ? `${meal.name} — ${meal.menu} · ${meal.date}`
+                                : `Booking ${booking._id}`}
+                            </option>
+                          );
+                        })}
+                    </select>
+                    <small style={{ display: "block", color: "#a9a592", marginTop: 7 }}>
+                      Bookings that already have a rebate request or have been checked in are excluded.
+                    </small>
+                  </div>
+
+                  <div style={{ marginBottom: 16 }}>
+                    <label
+                      htmlFor="rebate-reason"
+                      style={{ display: "block", marginBottom: 8, color: "#e9dfc7", fontSize: 12 }}
+                    >
+                      Reason for rebate
+                    </label>
+                    <textarea
+                      id="rebate-reason"
+                      value={rebateReason}
+                      onChange={(event) => setRebateReason(event.target.value)}
+                      placeholder="Explain why you are requesting a rebate…"
+                      minLength={5}
+                      maxLength={500}
+                      required
+                      rows={4}
+                      style={{
+                        width: "100%",
+                        padding: 12,
+                        borderRadius: 10,
+                        border: "1px solid rgba(209,174,103,.35)",
+                        background: "#17221f",
+                        color: "#f4ead4",
+                        resize: "vertical",
+                        font: "inherit",
+                      }}
+                    />
+                    <small style={{ display: "block", color: "#a9a592", marginTop: 7 }}>
+                      {rebateReason.length}/500 characters
+                    </small>
+                  </div>
+
+                  <button
+                    className="mm-primary-button"
+                    type="submit"
+                    disabled={rebateSubmitting || !rebateBookingId || rebateReason.trim().length < 5}
+                    style={{ maxWidth: 260 }}
+                  >
+                    {rebateSubmitting ? "Submitting…" : "Submit rebate request"}
+                  </button>
+                </form>
+              </div>
+
+              <div className="mm-section-heading">
+                <div>
+                  <h2>Your requests</h2>
+                  <p>Track the status of your submitted rebate requests.</p>
+                </div>
+              </div>
+
+              <div className="mm-list-panel">
+                {rebatesLoading ? (
+                  <div className="mm-empty">Loading rebate requests…</div>
+                ) : rebates.length === 0 ? (
+                  <div className="mm-empty">You have not submitted any rebate requests yet.</div>
+                ) : (
+                  rebates.map((rebate) => {
+                    const booking = bookings.find((item) => item._id === rebate.bookingId);
+                    const meal = booking ? getMealForBooking(booking) : null;
+                    const amount = rebate.amount?.$numberDecimal ?? rebate.amount ?? "0";
+
+                    return (
+                      <div className="mm-booking-row" key={rebate._id}>
+                        <div className="mm-booking-left">
+                          <div className="mm-booking-emoji">₹</div>
+                          <div>
+                            <strong>
+                              {meal ? `${meal.name} — ${meal.menu}` : "Meal rebate request"}
+                            </strong>
+                            <small>{rebate.reason || "No reason provided"}</small>
+                            <small>
+                              Amount: ₹{String(amount)} · {formatDate(rebate.createdAt)}
+                            </small>
+                          </div>
+                        </div>
+                        <span className="mm-status">{rebate.status || "PENDING"}</span>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </section>
+          )}
+
+          {activeTab === "Billing History" && (
+            <section>
+              <div className="mm-section-heading">
+                <div>
+                  <h2>Your billing ledger</h2>
+                  <p>Charges and credits recorded for your meal bookings.</p>
+                </div>
+                <button
+                  className="mm-text-link"
+                  type="button"
+                  onClick={loadBillingLedger}
+                  disabled={billingLoading}
+                >
+                  {billingLoading ? "Refreshing…" : "Refresh ↻"}
+                </button>
+              </div>
+
+              {billingError && (
+                <div className="mm-notice error" role="alert">
+                  {billingError}
+                </div>
+              )}
+
+              <div className="mm-list-panel">
+                {billingLoading ? (
+                  <div className="mm-empty">Loading billing history…</div>
+                ) : billingError ? (
+                  <div className="mm-empty">
+                    Could not load billing history. Use Refresh to try again.
+                  </div>
+                ) : billingLedger.length === 0 ? (
+                  <div className="mm-empty">
+                    No billing entries recorded yet. Meal charges and credits will appear here when recorded.
+                  </div>
+                ) : (
+                  billingLedger.map((entry, index) => {
+                    const amount =
+                      entry.amount?.$numberDecimal ?? entry.amount ?? "0";
+                    const isCredit = [
+                      "REBATE_CREDIT",
+                      "REFUND",
+                    ].includes(entry.type);
+                    const entryId =
+                      entry._id ||
+                      entry.referenceId ||
+                      `${entry.type}-${entry.date}-${index}`;
+
+                    return (
+                      <div className="mm-booking-row" key={entryId}>
+                        <div className="mm-booking-left">
+                          <div className="mm-booking-emoji">
+                            {isCredit ? "↙" : entry.type === "CHARGE" ? "₹" : "↔"}
+                          </div>
+                          <div>
+                            <strong>
+                              {entry.type === "CHARGE"
+                                ? "Meal charge"
+                                : entry.type === "REBATE_CREDIT"
+                                  ? "Rebate credit"
+                                  : entry.type === "REFUND"
+                                    ? "Refund"
+                                    : entry.type === "ADJUSTMENT"
+                                      ? "Billing adjustment"
+                                      : entry.type || "Billing entry"}
+                            </strong>
+                            <small>{entry.reason || "No description provided"}</small>
+                            <small>
+                              {formatDate(entry.date || entry.createdAt)}
+                              {entry.bookingId ? ` · Booking ${String(entry.bookingId).slice(0, 8)}` : ""}
+                            </small>
+                          </div>
+                        </div>
+                        <span
+                          className="mm-status"
+                          style={{
+                            color: isCredit ? "#c9e2b5" : "#f0d38e",
+                            background: isCredit ? "#85a96820" : "#c49b3d20",
+                          }}
+                        >
+                          {isCredit ? "+" : entry.type === "CHARGE" ? "−" : ""}₹{String(amount)}
+                        </span>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </section>
+          )}
+
+          {activeTab === "Hall Points" && (
+            <section>
+              <div className="mm-section-heading">
+                <div>
+                  <h2>Your Hall Points</h2>
+                  <p>
+                    Earn points through responsible meal bookings and attendance.
+                  </p>
+                </div>
+
+                <button
+                  className="mm-text-link"
+                  type="button"
+                  onClick={loadHallPoints}
+                  disabled={pointsLoading}
+                >
+                  {pointsLoading ? "Refreshing…" : "Refresh ↻"}
+                </button>
+              </div>
+
+              <div className="mm-stats" style={{ marginBottom: 22 }}>
+                <div className="mm-stat">
+                  <div className="mm-stat-label">Points balance</div>
+                  <div className="mm-stat-value">
+                    {pointsLoading && pointsBalance === null
+                      ? "…"
+                      : pointsBalance ?? "—"}
+                  </div>
+                  <div className="mm-stat-caption">Your current Hall Points</div>
+                </div>
+
+                <div className="mm-stat">
+                  <div className="mm-stat-label">Total transactions</div>
+                  <div className="mm-stat-value">
+                    {pointsLoading && pointsTotalTransactions === null
+                      ? "…"
+                      : pointsTotalTransactions ?? pointsTransactions.length}
+                  </div>
+                  <div className="mm-stat-caption">Recorded points transactions</div>
+                </div>
+
+                <div className="mm-stat">
+                  <div className="mm-stat-label">How to earn</div>
+                  <div
+                    style={{
+                      color: "#c6c1af",
+                      fontSize: 11,
+                      lineHeight: 1.9,
+                      marginTop: 10,
+                    }}
+                  >
+                    Early cancellation: +2
+                    <br />
+                    Successful check-in: +1
+                    <br />
+                    No-show: −2
+                  </div>
+                </div>
+              </div>
+
+              {pointsError && (
+                <div className="mm-notice error" role="alert">
+                  {pointsError}
+                </div>
+              )}
+
+              <div className="mm-section-heading">
+                <div>
+                  <h2>Points history</h2>
+                  <p>Your latest recorded Hall Points transactions.</p>
+                </div>
+              </div>
+
+              <div className="mm-list-panel">
+                {pointsLoading ? (
+                  <div className="mm-empty">Loading your points history…</div>
+                ) : pointsError ? (
+                  <div className="mm-empty">
+                    Could not load points history. Use Refresh to try again.
+                  </div>
+                ) : pointsTransactions.length === 0 ? (
+                  <div className="mm-empty">
+                    No points transactions recorded yet. Your history will appear
+                    here when points are awarded.
+                  </div>
+                ) : (
+                  pointsTransactions.map((transaction, index) => {
+                    const reasonLabels = {
+                      EARLY_CANCELLATION: "Early meal cancellation",
+                      SUCCESSFUL_REDEMPTION: "Successful QR check-in",
+                      NO_SHOW: "Missed meal (no-show)",
+                      SURPLUS_COLLECTION: "Surplus meal collection",
+                    };
+                    const points = Number(transaction.points) || 0;
+                    const transactionId =
+                      transaction._id || transaction.referenceKey || `${transaction.reason}-${transaction.createdAt}-${index}`;
+
+                    return (
+                      <div className="mm-booking-row" key={transactionId}>
+                        <div className="mm-booking-left">
+                          <div className="mm-booking-emoji">
+                            {points > 0 ? "✧" : "−"}
+                          </div>
+                          <div>
+                            <strong>
+                              {reasonLabels[transaction.reason] ||
+                                transaction.reason ||
+                                "Points transaction"}
+                            </strong>
+                            <small>
+                              {transaction.createdAt
+                                ? new Date(transaction.createdAt).toLocaleString(
+                                    "en-IN",
+                                    {
+                                      day: "numeric",
+                                      month: "short",
+                                      year: "numeric",
+                                      hour: "numeric",
+                                      minute: "2-digit",
+                                    }
+                                  )
+                                : "Date unavailable"}
+                            </small>
+                          </div>
+                        </div>
+
+                        <span
+                          className="mm-status"
+                          style={{
+                            color: points > 0 ? "#c9e2b5" : "#ffc4b4",
+                            background: points > 0 ? "#85a96820" : "#8e3d3022",
+                          }}
+                        >
+                          {points > 0 ? "+" : ""}
+                          {points}
+                        </span>
+                      </div>
+                    );
+                  })
                 )}
               </div>
             </section>

@@ -9,6 +9,7 @@ const dateSchema = z
   .regex(/^\d{4}-\d{2}-\d{2}$/, "Date must be in YYYY-MM-DD format.")
   .refine((value) => {
     const date = new Date(`${value}T00:00:00.000Z`);
+
     return (
       !Number.isNaN(date.getTime()) &&
       date.toISOString().slice(0, 10) === value
@@ -90,8 +91,11 @@ async function buildReport(slots) {
       noShow: 0,
       preparedPortions: 0,
       recordedLeftovers: 0,
+      consumedOrDistributed: 0,
       checkedIn: 0,
+      actualAttendees: 0,
       expectedAttendees: 0,
+      pendingCheckIn: 0,
       attendanceRate: 0,
       leftoverRate: 0,
       mealSlots: [],
@@ -117,8 +121,7 @@ async function buildReport(slots) {
     },
   ]);
 
-  // Use string IDs because separate ObjectId instances
-  // do not compare equal as JavaScript Map keys.
+  // Convert IDs to strings so Map lookups remain consistent.
   const bookingCounts = new Map();
 
   for (const group of bookingGroups) {
@@ -143,8 +146,6 @@ async function buildReport(slots) {
     const expectedAttendees =
       slot.finalHeadcount ?? optedIn + checkedIn;
 
-    const actualAttendees = checkedIn;
-    const pendingCheckIn = optedIn;
     const prepared = Number(slot.preparedPortions ?? 0);
     const leftovers = Number(slot.recordedLeftovers ?? 0);
 
@@ -169,6 +170,9 @@ async function buildReport(slots) {
       preparedPortions: prepared,
       recordedLeftovers: leftovers,
 
+      // This is a derived estimate, not independently measured consumption.
+      consumedOrDistributed: Math.max(0, prepared - leftovers),
+
       attendanceRate:
         expectedAttendees > 0
           ? Number(
@@ -182,8 +186,7 @@ async function buildReport(slots) {
           : 0,
     };
   });
-  const consumedOrDistributed =
-    Math.max(0, prepared - leftovers);
+
   const sum = (key) =>
     mealSlots.reduce((total, slot) => total + slot[key], 0);
 
@@ -199,13 +202,20 @@ async function buildReport(slots) {
     optedOut: sum("optedOut"),
     cancelled: sum("cancelled"),
     noShow: sum("noShow"),
+
     preparedPortions: totalPrepared,
     recordedLeftovers: totalLeftovers,
+    consumedOrDistributed: Math.max(
+      0,
+      totalPrepared - totalLeftovers
+    ),
+
     checkedIn: totalCheckedIn,
+    actualAttendees: totalCheckedIn,
     expectedAttendees: totalExpected,
-    actualAttendees,
-    pendingCheckIn, 
-    consumedOrDistributed,
+
+    // OPTED_IN bookings are awaiting check-in in the current model.
+    pendingCheckIn: sum("optedIn"),
 
     attendanceRate:
       totalExpected > 0
@@ -226,7 +236,7 @@ async function buildReport(slots) {
 }
 
 // GET /api/analytics/overview
-// Optional: ?from=YYYY-MM-DD&to=YYYY-MM-DD
+// Optional query: ?from=YYYY-MM-DD&to=YYYY-MM-DD
 export async function getOverview(req, res, next) {
   try {
     const hasFrom = req.query.from !== undefined;
@@ -258,7 +268,9 @@ export async function getOverview(req, res, next) {
       const todayRange = getISTDayRange(getTodayIST());
 
       end = todayRange.$lt;
-      start = new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
+      start = new Date(
+        end.getTime() - 30 * 24 * 60 * 60 * 1000
+      );
     }
 
     const slots = await MealSlot.find({
@@ -324,7 +336,10 @@ export async function getTrends(req, res, next) {
     }
 
     const slots = await MealSlot.find({
-      date: { $gte: range.start, $lt: range.end },
+      date: {
+        $gte: range.start,
+        $lt: range.end,
+      },
     })
       .sort({ date: 1, startTime: 1 })
       .lean();
@@ -358,6 +373,11 @@ export async function getTrends(req, res, next) {
     const dailyTrends = [...dailyMap.values()].map((day) => ({
       ...day,
 
+      consumedOrDistributed: Math.max(
+        0,
+        day.preparedPortions - day.recordedLeftovers
+      ),
+
       attendanceRate:
         day.expectedAttendees > 0
           ? Number(
@@ -368,7 +388,10 @@ export async function getTrends(req, res, next) {
       leftoverRate:
         day.preparedPortions > 0
           ? Number(
-              ((day.recordedLeftovers / day.preparedPortions) * 100).toFixed(2)
+              (
+                (day.recordedLeftovers / day.preparedPortions) *
+                100
+              ).toFixed(2)
             )
           : 0,
     }));

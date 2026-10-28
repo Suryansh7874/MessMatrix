@@ -63,3 +63,17 @@ export async function createStaff(req, res, next) {
     next(error);
   } 
 }
+export async function listStaff(req, res, next) {
+  try {
+    const staff = await User.find({
+      role: Role.MESS_STAFF,
+    })
+      .select("name email employeeId role isActive createdAt")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.status(200).json({ staff });
+  } catch (error) {
+    next(error);
+  }
+}

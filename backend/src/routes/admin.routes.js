@@ -1,7 +1,10 @@
 import { Router } from "express";
 import { authenticate, requireRole } from "../middleware/auth.middleware.js";
 import { Role } from "../utils/enums.js";
-import { createStaff } from "../controllers/admin.controller.js";
+import {
+  createStaff,
+  listStaff,
+} from "../controllers/admin.controller.js";
 
 const router = Router();
 
@@ -14,5 +17,11 @@ router.post(
   authenticate,
   requireRole(Role.MESS_ADMIN),
   createStaff
+);
+router.get(
+  "/staff",
+  authenticate,
+  requireRole(Role.MESS_ADMIN),
+  listStaff
 );
 export default router;

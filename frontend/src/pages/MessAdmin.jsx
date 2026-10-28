@@ -6,6 +6,7 @@ const navigation = [
   { id: "Overview", icon: "⌂", label: "Overview" },
   { id: "Meals", icon: "♨", label: "Meal Management" },
   { id: "Bookings", icon: "▤", label: "Bookings" },
+  { id: "Rebates", icon: "₹", label: "Rebates" },
   { id: "Students", icon: "♙", label: "Students" },
   { id: "Staff", icon: "♟", label: "Staff Registry" },
   { id: "Inventory", icon: "▧", label: "Inventory" },
@@ -23,6 +24,10 @@ export default function MessAdmin() {
   const [activeTab, setActiveTab] = useState("Overview");
   const [meals, setMeals] = useState([]);
   const [bookings, setBookings] = useState([]);
+  const [rebates, setRebates] = useState([]);
+  const [rebatesLoading, setRebatesLoading] = useState(false);
+  const [rebatesError, setRebatesError] = useState("");
+  const [rebateRefresh, setRebateRefresh] = useState(0);
   const [staff, setStaff] = useState([]);
   const [inventory, setInventory] = useState([]);
   const [overview, setOverview] = useState(null);
@@ -45,6 +50,7 @@ export default function MessAdmin() {
     name: "",
     time: "",
     menu: "",
+    price: "0",
     capacity: "200",
   });
   const [loadingData, setLoadingData] = useState(true);
@@ -52,6 +58,53 @@ export default function MessAdmin() {
   useEffect(() => {
     const timer = setInterval(() => setClock(new Date()), 1000);
     return () => clearInterval(timer);
+  }, []);
+
+  // Load registered staff from the database whenever the dashboard opens.
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadStaff() {
+      try {
+        const response = await api.get("/admin/staff");
+
+        if (cancelled) return;
+
+        const staffRecords = Array.isArray(response.data?.staff)
+          ? response.data.staff
+          : [];
+
+        setStaff(
+          staffRecords.map((member) => ({
+            id: member._id ?? member.id,
+            name: member.name ?? "",
+            email: member.email ?? "",
+            employeeId: member.employeeId || "—",
+            phone: "—",
+            role: member.role ?? "MESS_STAFF",
+            shift: "Not assigned",
+            active: member.isActive ?? true,
+          }))
+        );
+      } catch (error) {
+        if (!cancelled) {
+          console.error(
+            "Could not load registered staff:",
+            error.response?.data || error.message
+          );
+          setToast(
+            error.response?.data?.message ||
+              "Could not load registered staff."
+          );
+        }
+      }
+    }
+
+    loadStaff();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -98,6 +151,7 @@ export default function MessAdmin() {
             name: String(slot.mealType ?? "Meal").charAt(0) + String(slot.mealType ?? "Meal").slice(1).toLowerCase(),
             time: `${formatTime(new Date(slot.startTime))} – ${formatTime(new Date(slot.endTime))}`,
             menu: menu?.description || menu?.name || "Menu details unavailable",
+            price: Number(menu?.price?.$numberDecimal ?? menu?.price ?? 0),
             capacity: Number(slot.preparedPortions ?? slot.finalHeadcount ?? 0),
             booked: Number(headcount.currentOptedInCount ?? 0),
             open: slot.status === "OPEN" && !slot.bookingLocked && new Date(slot.cutoffTime) > new Date(),
@@ -117,6 +171,32 @@ export default function MessAdmin() {
   }, []);
 
   useEffect(() => {
+    if (activeTab !== "Rebates") return undefined;
+
+    let cancelled = false;
+    async function loadPendingRebates() {
+      setRebatesLoading(true);
+      setRebatesError("");
+      try {
+        const response = await api.get("/rebates/pending");
+        if (cancelled) return;
+        setRebates(Array.isArray(response.data?.rebates) ? response.data.rebates : []);
+      } catch (error) {
+        if (cancelled) return;
+        setRebatesError(
+          error?.response?.data?.message ||
+          "Could not load pending rebates. Please try again."
+        );
+      } finally {
+        if (!cancelled) setRebatesLoading(false);
+      }
+    }
+
+    loadPendingRebates();
+    return () => { cancelled = true; };
+  }, [activeTab, rebateRefresh]);
+
+  useEffect(() => {
     if (!toast) return undefined;
     const timer = setTimeout(() => setToast(""), 3000);
     return () => clearTimeout(timer);
@@ -129,6 +209,7 @@ export default function MessAdmin() {
   const checkedInAttendees = Number(overview?.checkedIn ?? 0);
   const totalBookingsRecorded = Number(overview?.totalBookings ?? bookings.length);
   const pendingBookings = bookings.filter((b) => b.status === "Pending").length;
+  const pendingRebateAmount = rebates.reduce((sum, rebate) => sum + (Number.parseFloat(rebate.amount) || 0), 0);
   const activeStaff = staff.filter((member) => member.active).length;
   const lowStock = inventory.filter((item) => item.quantity < item.minimum).length;
 
@@ -221,6 +302,16 @@ export default function MessAdmin() {
       return;
     }
 
+    const price = Number(mealForm.price);
+    if (
+      mealForm.price.trim() === "" ||
+      !Number.isFinite(price) ||
+      price < 0
+    ) {
+      notify("Enter a valid meal price of ₹0 or more.");
+      return;
+    }
+
     const mealText = `${mealForm.name} ${mealForm.menu}`.toLowerCase();
     const mealType = mealText.includes("breakfast")
       ? "BREAKFAST"
@@ -249,7 +340,7 @@ export default function MessAdmin() {
         description: mealForm.menu.trim(),
         mealType,
         date: serviceWindow.start.toISOString(),
-        price: 0,
+        price,
         imageUrl: "",
       });
 
@@ -262,7 +353,7 @@ export default function MessAdmin() {
         cutoffTime: serviceWindow.cutoff.toISOString(),
       });
 
-      setMealForm({ name: "", time: "", menu: "", capacity: "200" });
+      setMealForm({ name: "", time: "", menu: "", price: "0", capacity: "200" });
       setShowMealForm(false);
       notify("Meal slot created. Capacity is not stored by the current backend model.");
 
@@ -288,6 +379,7 @@ export default function MessAdmin() {
           name: String(slot.mealType ?? "Meal").charAt(0) + String(slot.mealType ?? "Meal").slice(1).toLowerCase(),
           time: `${formatTime(new Date(slot.startTime))} – ${formatTime(new Date(slot.endTime))}`,
           menu: menu?.description || menu?.name || "Menu details unavailable",
+          price: Number(menu?.price?.$numberDecimal ?? menu?.price ?? 0),
           capacity: Number(slot.preparedPortions ?? slot.finalHeadcount ?? 0),
           booked: Number(count.currentOptedInCount ?? 0),
           open: slot.status === "OPEN" && !slot.bookingLocked && new Date(slot.cutoffTime) > new Date(),
@@ -1694,6 +1786,18 @@ export default function MessAdmin() {
                   {pendingBookings}
                 </span>
               )}
+              {item.id === "Rebates" && rebates.length > 0 && (
+                <span style={{
+                  marginLeft: "auto",
+                  color: "#f0c97c",
+                  fontSize: 9,
+                  background: "rgba(228,189,115,.12)",
+                  borderRadius: 20,
+                  padding: "3px 6px",
+                }}>
+                  {rebates.length}
+                </span>
+              )}
             </button>
           ))}
         </nav>
@@ -1917,7 +2021,7 @@ export default function MessAdmin() {
             {showMealForm && (
               <form className="mm-form-panel" onSubmit={addMeal}>
                 <h3>✧ Inscribe a New Meal Session</h3>
-                <p>Set the meal's name, serving time, menu, and seating capacity.</p>
+                <p>Set the meal's name, serving time, menu, price, and seating capacity.</p>
                 <div className="mm-form-grid">
                   <Field label="Meal name" full>
                     <input className="mm-input" required placeholder="e.g. Special Dinner" value={mealForm.name} onChange={(e) => setMealForm({ ...mealForm, name: e.target.value })} />
@@ -1927,6 +2031,9 @@ export default function MessAdmin() {
                   </Field>
                   <Field label="Maximum capacity">
                     <input className="mm-input" required type="number" min="1" value={mealForm.capacity} onChange={(e) => setMealForm({ ...mealForm, capacity: e.target.value })} />
+                  </Field>
+                  <Field label="Meal price (₹)">
+                    <input className="mm-input" required type="number" min="0" step="0.01" inputMode="decimal" placeholder="e.g. 60.00" value={mealForm.price} onChange={(e) => setMealForm({ ...mealForm, price: e.target.value })} />
                   </Field>
                   <Field label="Menu details" full>
                     <textarea className="mm-textarea" rows="2" placeholder="Enter planned menu items" value={mealForm.menu} onChange={(e) => setMealForm({ ...mealForm, menu: e.target.value })} />
@@ -1950,6 +2057,9 @@ export default function MessAdmin() {
                     <StatusPill status={meal.open ? "Open" : "Closed"} />
                   </div>
                   <p>{meal.menu}</p>
+                  <p style={{ color: "var(--mm-gold-bright)", fontWeight: 600 }}>
+                    Price: ₹{Number.isFinite(Number(meal.price)) ? Number(meal.price).toFixed(2) : "0.00"}
+                  </p>
                   <div className="mm-meal-progress">
                     <div style={{ width: `${Math.min(100, (meal.booked / meal.capacity) * 100)}%` }} />
                   </div>
@@ -2039,6 +2149,112 @@ export default function MessAdmin() {
                 {filteredBookings.length === 0 && <div className="mm-empty"><div>⌕</div>No matching bookings found.</div>}
               </div>
             </section>
+          </>
+        )}
+
+        {activeTab === "Rebates" && (
+          <>
+            <div className="mm-section-head">
+              <div>
+                <h3>Pending Rebate Ledger</h3>
+                <p>Review rebate requests currently awaiting processing.</p>
+              </div>
+              <button
+                className="mm-btn primary"
+                onClick={() => setRebateRefresh((value) => value + 1)}
+                disabled={rebatesLoading}
+              >
+                {rebatesLoading ? "↻ Loading…" : "↻ Refresh"}
+              </button>
+            </div>
+
+            <div className="mm-stats">
+              <Stat
+                icon="₹"
+                label="Pending Requests"
+                value={rebates.length}
+                trend="Live API"
+                foot="Requests returned by the backend"
+              />
+              <Stat
+                icon="◈"
+                label="Total Pending Amount"
+                value={money(pendingRebateAmount)}
+                trend="Pending only"
+                foot="Sum of the listed pending rebate amounts"
+              />
+            </div>
+
+            {rebatesError && (
+              <div className="mm-panel" role="alert" style={{ marginBottom: 18 }}>
+                <div className="mm-panel-title">
+                  <div>
+                    <h3>Rebates could not be loaded</h3>
+                    <p>{rebatesError}</p>
+                  </div>
+                  <button
+                    className="mm-btn primary"
+                    onClick={() => setRebateRefresh((value) => value + 1)}
+                  >
+                    Try again
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <section className="mm-panel">
+              <div className="mm-panel-title">
+                <div>
+                  <h3>Rebate Requests</h3>
+                  <p>{rebatesLoading ? "Fetching pending requests…" : `${rebates.length} pending request${rebates.length === 1 ? "" : "s"}`}</p>
+                </div>
+                <span className="mm-tag">✧ Rebate ledger</span>
+              </div>
+              <div className="mm-table-wrap">
+                <table className="mm-table">
+                  <thead>
+                    <tr>
+                      <th>Rebate</th>
+                      <th>Student Reference</th>
+                      <th>Booking Reference</th>
+                      <th>Amount</th>
+                      <th>Status</th>
+                      <th>Requested On</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rebates.map((rebate) => {
+                      const studentRef = rebate.studentId && typeof rebate.studentId === "object"
+                        ? (rebate.studentId.name || rebate.studentId.email || rebate.studentId._id || "Student")
+                        : rebate.studentId;
+                      const bookingRef = rebate.bookingId && typeof rebate.bookingId === "object"
+                        ? (rebate.bookingId._id || rebate.bookingId.id || "Booking")
+                        : rebate.bookingId;
+                      const requestedAt = rebate.createdAt ? new Date(rebate.createdAt) : null;
+                      const requestedLabel = requestedAt && !Number.isNaN(requestedAt.getTime())
+                        ? requestedAt.toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })
+                        : "—";
+                      return (
+                        <tr key={rebate._id}>
+                          <td><span className="mm-table-name" title={rebate._id || ""}>{rebate._id ? `…${String(rebate._id).slice(-8)}` : "—"}</span></td>
+                          <td title={studentRef ? String(studentRef) : "Not provided"}>{studentRef ? `…${String(studentRef).slice(-10)}` : "—"}</td>
+                          <td title={bookingRef ? String(bookingRef) : "Not provided"}>{bookingRef ? `…${String(bookingRef).slice(-10)}` : "—"}</td>
+                          <td>{money(Number.parseFloat(rebate.amount) || 0)}</td>
+                          <td><StatusPill status={rebate.status || "PENDING"} /></td>
+                          <td>{requestedLabel}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                {!rebatesLoading && !rebatesError && rebates.length === 0 && (
+                  <div className="mm-empty"><div>₹</div>No pending rebate requests were found.</div>
+                )}
+              </div>
+            </section>
+            <p style={{ color: "var(--mm-muted)", fontSize: 11, marginTop: 12 }}>
+              This view is read-only because the current backend exposes a pending-rebates fetch endpoint, but no admin approval or rejection endpoint.
+            </p>
           </>
         )}
 
