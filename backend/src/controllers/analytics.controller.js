@@ -1,48 +1,82 @@
 
 import { z } from "zod";
+
 import MealSlot from "../models/MealSlot.js";
 import Booking from "../models/Booking.js";
 
-const dateSchema = z.string().regex(//regex to validate date format YYYY-MM-DD
-  /^\d{4}-\d{2}-\d{2}$/,            //regex pattern to match the date format YYYY-MM-DD
-  "Date must be in YYYY-MM-DD format."
-);
+const dateSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Date must be in YYYY-MM-DD format.")
+  .refine((value) => {
+    const date = new Date(`${value}T00:00:00.000Z`);
+    return (
+      !Number.isNaN(date.getTime()) &&
+      date.toISOString().slice(0, 10) === value
+    );
+  }, "Invalid calendar date.");
 
-// Interpret dates in Indian Standard Time (IST).
 function getISTDayRange(dateString) {
-  const start = new Date(`${dateString}T00:00:00+05:30`);
+  const parsed = dateSchema.safeParse(dateString);
 
-  if (
-    Number.isNaN(start.getTime()) ||
-    start.toISOString().slice(0, 10) !== dateString
-  ) {
+  if (!parsed.success) {
     return null;
   }
 
+  const start = new Date(`${dateString}T00:00:00+05:30`);
   const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
 
   return { $gte: start, $lt: end };
 }
 
-function getDateRange(from, to) {// Function to get the date range for the analytics report based on the provided 'from' and 'to' dates.
+function getDateRange(from, to) {
   const fromParsed = dateSchema.safeParse(from);
   const toParsed = dateSchema.safeParse(to);
 
-  if (!fromParsed.success || !toParsed.success) {
+  if (!fromParsed.success || !toParsed.success || from > to) {
     return null;
   }
 
   const startRange = getISTDayRange(from);
   const endRange = getISTDayRange(to);
 
-  if (!startRange || !endRange || from > to) {
+  if (!startRange || !endRange) {
     return null;
   }
 
   return {
-    start: startRange.$gte,//startRange.$gte is the start of the date range (inclusive) //gte means greater than or equal to, so the start date is included in the range
-    end: endRange.$lt      //endRange.$lt is the end of the date range (exclusive)      //lt means less than, so the end date is excluded from the range
+    start: startRange.$gte,
+    end: endRange.$lt,
   };
+}
+
+function getTodayIST() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+
+  const values = Object.fromEntries(
+    parts.map(({ type, value }) => [type, value])
+  );
+
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function formatISTDate(date) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+
+  const values = Object.fromEntries(
+    parts.map(({ type, value }) => [type, value])
+  );
+
+  return `${values.year}-${values.month}-${values.day}`;
 }
 
 async function buildReport(slots) {
@@ -50,42 +84,45 @@ async function buildReport(slots) {
     return {
       slotCount: 0,
       totalBookings: 0,
+      optedIn: 0,
       optedOut: 0,
       cancelled: 0,
+      noShow: 0,
       preparedPortions: 0,
       recordedLeftovers: 0,
       checkedIn: 0,
       expectedAttendees: 0,
       attendanceRate: 0,
       leftoverRate: 0,
-      mealSlots: []
+      mealSlots: [],
     };
   }
 
-  const slotIds = slots.map((slot) => slot._id); // Extract the IDs of the meal slots to use in the aggregation query
+  const slotIds = slots.map((slot) => slot._id);
 
   const bookingGroups = await Booking.aggregate([
     {
       $match: {
-        mealSlotId: { $in: slotIds }
-      }
+        mealSlotId: { $in: slotIds },
+      },
     },
     {
       $group: {
         _id: {
           mealSlotId: "$mealSlotId",
-          status: "$status"
+          status: "$status",
         },
-        count: { $sum: 1 }
-      }
-    }
+        count: { $sum: 1 },
+      },
+    },
   ]);
 
-  // Build status counts separately for each meal slot.
-  const bookingCounts = new Map();  // Map to hold booking counts for each meal slot, keyed by mealSlotId
+  // Use string IDs because separate ObjectId instances
+  // do not compare equal as JavaScript Map keys.
+  const bookingCounts = new Map();
 
   for (const group of bookingGroups) {
-    const slotId = group._id.mealSlotId;
+    const slotId = String(group._id.mealSlotId);
 
     if (!bookingCounts.has(slotId)) {
       bookingCounts.set(slotId, {});
@@ -95,20 +132,19 @@ async function buildReport(slots) {
   }
 
   const mealSlots = slots.map((slot) => {
-    const counts = bookingCounts.get(slot._id) || {};
+    const counts = bookingCounts.get(String(slot._id)) || {};
 
-    const checkedIn = counts.CHECKED_IN || 0;
     const optedIn = counts.OPTED_IN || 0;
+    const checkedIn = counts.CHECKED_IN || 0;
     const optedOut = counts.OPTED_OUT || 0;
     const cancelled = counts.CANCELLED || 0;
     const noShow = counts.NO_SHOW || 0;
 
-    // Once the cutoff has been locked, finalHeadcount is the official expected count. Before locking, use active bookings.
     const expectedAttendees =
       slot.finalHeadcount ?? optedIn + checkedIn;
 
-    const prepared = slot.preparedPortions ?? 0;
-    const leftovers = slot.recordedLeftovers ?? 0;
+    const prepared = Number(slot.preparedPortions ?? 0);
+    const leftovers = Number(slot.recordedLeftovers ?? 0);
 
     return {
       mealSlotId: slot._id,
@@ -117,24 +153,31 @@ async function buildReport(slots) {
       status: slot.status,
       bookingLocked: slot.bookingLocked,
       finalHeadcount: slot.finalHeadcount,
+
       totalBookings:
         optedIn + checkedIn + optedOut + cancelled + noShow,
+
       optedIn,
       checkedIn,
       optedOut,
       cancelled,
       noShow,
       expectedAttendees,
+
       preparedPortions: prepared,
       recordedLeftovers: leftovers,
+
       attendanceRate:
         expectedAttendees > 0
-          ? Number(((checkedIn / expectedAttendees) * 100).toFixed(2))
+          ? Number(
+              ((checkedIn / expectedAttendees) * 100).toFixed(2)
+            )
           : 0,
+
       leftoverRate:
         prepared > 0
           ? Number(((leftovers / prepared) * 100).toFixed(2))
-          : 0
+          : 0,
     };
   });
 
@@ -149,26 +192,35 @@ async function buildReport(slots) {
   return {
     slotCount: mealSlots.length,
     totalBookings: sum("totalBookings"),
+    optedIn: sum("optedIn"),
     optedOut: sum("optedOut"),
     cancelled: sum("cancelled"),
+    noShow: sum("noShow"),
     preparedPortions: totalPrepared,
     recordedLeftovers: totalLeftovers,
     checkedIn: totalCheckedIn,
     expectedAttendees: totalExpected,
+
     attendanceRate:
       totalExpected > 0
-        ? Number(((totalCheckedIn / totalExpected) * 100).toFixed(2))
+        ? Number(
+            ((totalCheckedIn / totalExpected) * 100).toFixed(2)
+          )
         : 0,
+
     leftoverRate:
       totalPrepared > 0
-        ? Number(((totalLeftovers / totalPrepared) * 100).toFixed(2))
+        ? Number(
+            ((totalLeftovers / totalPrepared) * 100).toFixed(2)
+          )
         : 0,
-    mealSlots
+
+    mealSlots,
   };
 }
 
 // GET /api/analytics/overview
-// Optional query: ?from=YYYY-MM-DD&to=YYYY-MM-DD
+// Optional: ?from=YYYY-MM-DD&to=YYYY-MM-DD
 export async function getOverview(req, res, next) {
   try {
     const hasFrom = req.query.from !== undefined;
@@ -176,7 +228,7 @@ export async function getOverview(req, res, next) {
 
     if (hasFrom !== hasTo) {
       return res.status(400).json({
-        message: "Provide both from and to dates."
+        message: "Provide both from and to dates.",
       });
     }
 
@@ -188,39 +240,35 @@ export async function getOverview(req, res, next) {
 
       if (!range) {
         return res.status(400).json({
-          message: "Invalid date range. Use YYYY-MM-DD and ensure from <= to."
+          message:
+            "Invalid date range. Use YYYY-MM-DD and ensure from <= to.",
         });
       }
 
       start = range.start;
       end = range.end;
     } else {
-      // Default overview: last 30 calendar days including today (IST).
-      const today = new Date(
-        new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" })
-      );
-
-      const todayString = [
-        today.getFullYear(),
-        String(today.getMonth() + 1).padStart(2, "0"),
-        String(today.getDate()).padStart(2, "0")
-      ].join("-");
-
-      const todayRange = getISTDayRange(todayString);
+      // Last 30 calendar days, including today in IST.
+      const todayRange = getISTDayRange(getTodayIST());
 
       end = todayRange.$lt;
       start = new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
     }
 
     const slots = await MealSlot.find({
-      date: { $gte: start, $lt: end }
-    }).sort({ date: 1, startTime: 1 }).lean();
+      date: { $gte: start, $lt: end },
+    })
+      .sort({ date: 1, startTime: 1 })
+      .lean();
 
     const report = await buildReport(slots);
 
     return res.json({
-      period: { from: start, toExclusive: end },
-      ...report
+      period: {
+        from: start,
+        toExclusive: end,
+      },
+      ...report,
     });
   } catch (error) {
     next(error);
@@ -234,27 +282,23 @@ export async function getDailyReport(req, res, next) {
 
     if (!parsed.success) {
       return res.status(400).json({
-        message: "Provide date in YYYY-MM-DD format."
+        message: "Provide a valid date in YYYY-MM-DD format.",
       });
     }
 
     const range = getISTDayRange(parsed.data);
 
-    if (!range) {
-      return res.status(400).json({
-        message: "Invalid calendar date."
-      });
-    }
-
     const slots = await MealSlot.find({
-      date: range
-    }).sort({ startTime: 1 }).lean();
+      date: range,
+    })
+      .sort({ startTime: 1 })
+      .lean();
 
     const report = await buildReport(slots);
 
     return res.json({
       date: parsed.data,
-      ...report
+      ...report,
     });
   } catch (error) {
     next(error);
@@ -268,21 +312,22 @@ export async function getTrends(req, res, next) {
 
     if (!range) {
       return res.status(400).json({
-        message: "Provide valid from and to dates in YYYY-MM-DD format."
+        message:
+          "Provide valid from and to dates in YYYY-MM-DD format.",
       });
     }
 
     const slots = await MealSlot.find({
-      date: { $gte: range.start, $lt: range.end }
-    }).sort({ date: 1, startTime: 1 }).lean();
+      date: { $gte: range.start, $lt: range.end },
+    })
+      .sort({ date: 1, startTime: 1 })
+      .lean();
 
     const report = await buildReport(slots);
     const dailyMap = new Map();
 
     for (const slot of report.mealSlots) {
-      const day = new Date(slot.date).toLocaleDateString("en-CA", {
-        timeZone: "Asia/Kolkata"
-      });
+      const day = formatISTDate(new Date(slot.date));
 
       if (!dailyMap.has(day)) {
         dailyMap.set(day, {
@@ -291,7 +336,7 @@ export async function getTrends(req, res, next) {
           preparedPortions: 0,
           recordedLeftovers: 0,
           expectedAttendees: 0,
-          checkedIn: 0
+          checkedIn: 0,
         });
       }
 
@@ -306,27 +351,29 @@ export async function getTrends(req, res, next) {
 
     const dailyTrends = [...dailyMap.values()].map((day) => ({
       ...day,
+
       attendanceRate:
         day.expectedAttendees > 0
           ? Number(
               ((day.checkedIn / day.expectedAttendees) * 100).toFixed(2)
             )
           : 0,
+
       leftoverRate:
         day.preparedPortions > 0
           ? Number(
               ((day.recordedLeftovers / day.preparedPortions) * 100).toFixed(2)
             )
-          : 0
+          : 0,
     }));
 
     return res.json({
       period: {
         from: req.query.from,
-        to: req.query.to
+        to: req.query.to,
       },
       ...report,
-      dailyTrends
+      dailyTrends,
     });
   } catch (error) {
     next(error);

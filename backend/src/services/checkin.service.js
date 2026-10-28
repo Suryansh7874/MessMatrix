@@ -1,5 +1,4 @@
 
-import mongoose from "mongoose";
 import crypto from "node:crypto";
 
 import Booking from "../models/Booking.js";
@@ -30,8 +29,10 @@ export async function validateAndCheckIn({
   }
 
   if (
-    !mongoose.isValidObjectId(expectedMealSlotId) ||
-    !mongoose.isValidObjectId(scannedBy)
+    typeof expectedMealSlotId !== "string" ||
+    !expectedMealSlotId.trim() ||
+    typeof scannedBy !== "string" ||
+    !scannedBy.trim()
   ) {
     return {
       status: 400,
@@ -39,152 +40,157 @@ export async function validateAndCheckIn({
     };
   }
 
-  const session = await mongoose.startSession();
-  let result;
+  const now = new Date();
+  const tokenHash = hashToken(token);
+
+  const qrToken = await QRToken.findOne({ tokenHash });
+
+  if (!qrToken || qrToken.expiresAt <= now || qrToken.isUsed) {
+    return {
+      status: 401,
+      message: "QR token is invalid, expired, or already used.",
+    };
+  }
+
+  const booking = await Booking.findById(qrToken.bookingId);
+
+  if (!booking) {
+    return {
+      status: 404,
+      message: "Booking associated with this QR was not found.",
+    };
+  }
+
+  if (String(booking.mealSlotId) !== expectedMealSlotId) {
+    return {
+      status: 401,
+      message: "This QR code does not belong to the requested meal slot.",
+    };
+  }
+
+  const slot = await MealSlot.findById(booking.mealSlotId);
+
+  if (!slot) {
+    return { status: 404, message: "Meal slot not found." };
+  }
+
+  if (
+    slot.status !== SlotStatus.OPEN ||
+    now < new Date(slot.startTime) ||
+    now >= new Date(slot.endTime)
+  ) {
+    return {
+      status: 409,
+      message: "Check-in is allowed only during meal service.",
+    };
+  }
+
+  if (booking.status === BookingStatus.CHECKED_IN) {
+    return {
+      status: 409,
+      message: "This student has already checked in.",
+    };
+  }
+
+  if (booking.status !== BookingStatus.OPTED_IN) {
+    return {
+      status: 409,
+      message: "This booking is not eligible for check-in.",
+    };
+  }
+
+  // Atomically claim the QR token so simultaneous scans cannot both proceed.
+  const claimedToken = await QRToken.findOneAndUpdate(
+    {
+      _id: qrToken._id,
+      isUsed: false,
+      expiresAt: { $gt: now },
+    },
+    {
+      $set: {
+        isUsed: true,
+        usedAt: now,
+      },
+    },
+    { new: true }
+  );
+
+  if (!claimedToken) {
+    return {
+      status: 409,
+      message: "This QR code has already been used or expired.",
+    };
+  }
+
+  // Atomically transition the booking from OPTED_IN to CHECKED_IN.
+  const updatedBooking = await Booking.findOneAndUpdate(
+    {
+      _id: booking._id,
+      status: BookingStatus.OPTED_IN,
+      mealSlotId: expectedMealSlotId,
+    },
+    {
+      $set: {
+        status: BookingStatus.CHECKED_IN,
+        checkedInAt: now,
+        checkedInBy: scannedBy,
+      },
+    },
+    {
+      new: true,
+      runValidators: true,
+    }
+  );
+
+  if (!updatedBooking) {
+    // Best-effort release: permit a retry if the booking was not changed.
+    await QRToken.updateOne(
+      { _id: claimedToken._id, isUsed: true, usedAt: now },
+      { $set: { isUsed: false, usedAt: null } }
+    );
+
+    return {
+      status: 409,
+      message: "This booking has already been processed.",
+    };
+  }
 
   try {
-    await session.withTransaction(async () => {
-      const tokenHash = hashToken(token);
+    const actualEventId =
+      typeof eventId === "string" && eventId.trim()
+        ? eventId
+        : crypto.randomUUID();
 
-      const qrToken = await QRToken.findOne({ tokenHash }).session(session);
-
-      if (!qrToken) {
-        result = {
-          status: 401,
-          message: "QR token is invalid or has expired.",
-        };
-        return;
-      }
-
-      const booking = await Booking.findById(qrToken.bookingId)
-        .session(session);
-
-      if (!booking) {
-        result = {
-          status: 404,
-          message: "Booking associated with this QR was not found.",
-        };
-        return;
-      }
-
-      // Prevent a QR from being scanned through another meal slot's route.
-      if (String(booking.mealSlotId) !== String(expectedMealSlotId)) {
-        result = {
-          status: 401,
-          message: "This QR code does not belong to the requested meal slot.",
-        };
-        return;
-      }
-
-      const slot = await MealSlot.findById(booking.mealSlotId)
-        .session(session);
-
-      if (!slot) {
-        result = {
-          status: 404,
-          message: "Meal slot not found.",
-        };
-        return;
-      }
-
-      const now = new Date();
-
-      if (
-        slot.status !== SlotStatus.OPEN ||
-        now < new Date(slot.startTime) ||
-        now >= new Date(slot.endTime)
-      ) {
-        result = {
-          status: 409,
-          message: "Check-in is allowed only during meal service.",
-        };
-        return;
-      }
-
-      if (booking.status === BookingStatus.CHECKED_IN) {
-        result = {
-          status: 409,
-          message: "This student has already checked in.",
-        };
-        return;
-      }
-
-      if (booking.status !== BookingStatus.OPTED_IN) {
-        result = {
-          status: 409,
-          message: "This booking is not eligible for check-in.",
-        };
-        return;
-      }
-
-      // Atomic status transition prevents two scans checking in the same booking.
-      const updatedBooking = await Booking.findOneAndUpdate(
-        {
-          _id: booking._id,
-          status: BookingStatus.OPTED_IN,
-        },
-        {
-          $set: {
-            status: BookingStatus.CHECKED_IN,
-            checkedInAt: now,
-            checkedInBy: scannedBy,
-          },
-        },
-        {
-          new: true,
-          runValidators: true,
-          session,
-        }
-      );
-
-      if (!updatedBooking) {
-        result = {
-          status: 409,
-          message: "This booking has already been processed.",
-        };
-        return;
-      }
-
-      // Match the existing CheckIn schema.
-      // eventId is a unique per-check-in identifier, not the mealSlotId.
-      const [checkIn] = await CheckIn.create(
-        [
-          {
-            qrTokenId: String(qrToken._id),
-            studentId: String(updatedBooking.studentId),
-            mealSlotId: String(slot._id),
-            scannedBy: String(scannedBy),
-            status: CheckInStatus.VALID,
-            isSynced: true,
-            deviceId: null,
-            scannedAt: now,
-            eventId: crypto.randomUUID(),
-          },
-        ],
-        { session }
-      );
-
-      result = {
-        success: true,
-        message: "QR verified. Student checked in successfully.",
-        attendance: {
-          checkInId: checkIn._id,
-          bookingId: updatedBooking._id,
-          studentId: updatedBooking.studentId,
-          mealSlotId: slot._id,
-          status: updatedBooking.status,
-          checkedInAt: updatedBooking.checkedInAt,
-          scannedAt: checkIn.scannedAt,
-          eventId: eventId || crypto.randomUUID(),
-        },
-      };
+    const checkIn = await CheckIn.create({
+      qrTokenId: String(claimedToken._id),
+      studentId: String(updatedBooking.studentId),
+      mealSlotId: String(slot._id),
+      scannedBy,
+      status: CheckInStatus.VALID,
+      isSynced: true,
+      deviceId: null,
+      scannedAt: now,
+      eventId: actualEventId,
     });
 
-    return result ?? {
-      status: 409,
-      message: "Unable to complete check-in. Please retry.",
+    return {
+      success: true,
+      message: "QR verified. Student checked in successfully.",
+      attendance: {
+        checkInId: checkIn._id,
+        bookingId: updatedBooking._id,
+        studentId: updatedBooking.studentId,
+        mealSlotId: slot._id,
+        status: updatedBooking.status,
+        checkedInAt: updatedBooking.checkedInAt,
+        scannedAt: checkIn.scannedAt,
+        eventId: checkIn.eventId,
+      },
     };
-  } finally {
-    await session.endSession();
+  } catch (error) {
+    // Do not silently undo a completed booking update. A failed CheckIn
+    // insert needs reconciliation because standalone MongoDB has no transaction.
+    error.checkInPartiallyCompleted = true;
+    throw error;
   }
 }
