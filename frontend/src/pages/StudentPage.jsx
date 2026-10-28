@@ -25,6 +25,7 @@ const NAV_ITEMS = [
   { label: "My Bookings", icon: "▤" },
   { label: "Today's Menu", icon: "♨" },
   { label: "My Activity", icon: "◷" },
+  { label: "Rebate Requests", icon: "₹" },
 ];
 
 function getSlotId(booking) {
@@ -69,6 +70,11 @@ export default function StudentPage() {
   const [clock, setClock] = useState(new Date());
   const [loading, setLoading] = useState(true);
   const [busySlotId, setBusySlotId] = useState("");
+  const [rebates, setRebates] = useState([]);
+  const [rebatesLoading, setRebatesLoading] = useState(false);
+  const [rebateBookingId, setRebateBookingId] = useState("");
+  const [rebateReason, setRebateReason] = useState("");
+  const [rebateSubmitting, setRebateSubmitting] = useState(false);
 
   useEffect(() => {
     const timer = window.setInterval(
@@ -112,6 +118,58 @@ export default function StudentPage() {
     const response = await api.get("/bookings/my");
     setBookings(response.data?.bookings ?? []);
   }, []);
+
+  const loadMyRebates = useCallback(async () => {
+    setRebatesLoading(true);
+
+    try {
+      const response = await api.get("/rebates/my-rebates");
+      setRebates(response.data?.rebates ?? []);
+    } catch (error) {
+      setNoticeType("error");
+      setNotice(errorMessage(error, "Could not load your rebate requests."));
+    } finally {
+      setRebatesLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === "Rebate Requests") {
+      loadMyRebates();
+    }
+  }, [activeTab, loadMyRebates]);
+
+  async function submitRebateRequest(event) {
+    event.preventDefault();
+
+    if (!rebateBookingId || !rebateReason.trim()) {
+      setNoticeType("error");
+      setNotice("Select a booking and enter a reason.");
+      return;
+    }
+
+    setRebateSubmitting(true);
+    setNotice("");
+
+    try {
+      await api.post("/rebates", {
+        bookingId: rebateBookingId,
+        reason: rebateReason.trim(),
+      });
+
+      setRebateBookingId("");
+      setRebateReason("");
+      await loadMyRebates();
+
+      setNoticeType("success");
+      setNotice("Your rebate request was submitted successfully.");
+    } catch (error) {
+      setNoticeType("error");
+      setNotice(errorMessage(error, "Could not submit the rebate request."));
+    } finally {
+      setRebateSubmitting(false);
+    }
+  }
 
   const meals = useMemo(() => {
     return mealSlots
@@ -943,7 +1001,7 @@ export default function StudentPage() {
           }
 
           .mm-nav {
-            grid-template-columns: repeat(4, minmax(0, 1fr));
+            grid-template-columns: repeat(5, minmax(0, 1fr));
             margin-top: 13px;
           }
 
@@ -1117,7 +1175,9 @@ export default function StudentPage() {
                     ? "Review your active meal reservations and cancel before the booking cutoff."
                     : activeTab === "Today's Menu"
                       ? "Explore available meal slots and reserve your place at the Refectory."
-                      : "A record of the meal reservations currently linked to your account."}
+                      : activeTab === "Rebate Requests"
+                        ? "Request a rebate for a meal booking and track its status."
+                        : "A record of the meal reservations currently linked to your account."}
               </p>
             </div>
 
@@ -1405,6 +1465,153 @@ export default function StudentPage() {
                       activity
                     />
                   ))
+                )}
+              </div>
+            </section>
+          )}
+
+          {activeTab === "Rebate Requests" && (
+            <section>
+              <div className="mm-section-heading">
+                <div>
+                  <h2>Request a rebate</h2>
+                  <p>Select a booking and explain why you are requesting a rebate.</p>
+                </div>
+                <button
+                  className="mm-text-link"
+                  type="button"
+                  onClick={loadMyRebates}
+                  disabled={rebatesLoading}
+                >
+                  {rebatesLoading ? "Refreshing…" : "Refresh ↻"}
+                </button>
+              </div>
+
+              <div className="mm-list-panel" style={{ padding: 18 }}>
+                <form onSubmit={submitRebateRequest}>
+                  <div style={{ marginBottom: 16 }}>
+                    <label
+                      htmlFor="rebate-booking"
+                      style={{ display: "block", marginBottom: 8, color: "#e9dfc7", fontSize: 12 }}
+                    >
+                      Select booking
+                    </label>
+                    <select
+                      id="rebate-booking"
+                      value={rebateBookingId}
+                      onChange={(event) => setRebateBookingId(event.target.value)}
+                      required
+                      style={{
+                        width: "100%",
+                        padding: 12,
+                        borderRadius: 10,
+                        border: "1px solid rgba(209,174,103,.35)",
+                        background: "#17221f",
+                        color: "#f4ead4",
+                        font: "inherit",
+                      }}
+                    >
+                      <option value="">Choose a meal booking</option>
+                      {bookings
+                        .filter((booking) =>
+                          !booking.checkedInAt &&
+                          !rebates.some((rebate) => rebate.bookingId === booking._id)
+                        )
+                        .map((booking) => {
+                          const meal = getMealForBooking(booking);
+                          return (
+                            <option key={booking._id} value={booking._id}>
+                              {meal
+                                ? `${meal.name} — ${meal.menu} · ${meal.date}`
+                                : `Booking ${booking._id}`}
+                            </option>
+                          );
+                        })}
+                    </select>
+                    <small style={{ display: "block", color: "#a9a592", marginTop: 7 }}>
+                      Bookings that already have a rebate request or have been checked in are excluded.
+                    </small>
+                  </div>
+
+                  <div style={{ marginBottom: 16 }}>
+                    <label
+                      htmlFor="rebate-reason"
+                      style={{ display: "block", marginBottom: 8, color: "#e9dfc7", fontSize: 12 }}
+                    >
+                      Reason for rebate
+                    </label>
+                    <textarea
+                      id="rebate-reason"
+                      value={rebateReason}
+                      onChange={(event) => setRebateReason(event.target.value)}
+                      placeholder="Explain why you are requesting a rebate…"
+                      minLength={5}
+                      maxLength={500}
+                      required
+                      rows={4}
+                      style={{
+                        width: "100%",
+                        padding: 12,
+                        borderRadius: 10,
+                        border: "1px solid rgba(209,174,103,.35)",
+                        background: "#17221f",
+                        color: "#f4ead4",
+                        resize: "vertical",
+                        font: "inherit",
+                      }}
+                    />
+                    <small style={{ display: "block", color: "#a9a592", marginTop: 7 }}>
+                      {rebateReason.length}/500 characters
+                    </small>
+                  </div>
+
+                  <button
+                    className="mm-primary-button"
+                    type="submit"
+                    disabled={rebateSubmitting || !rebateBookingId || rebateReason.trim().length < 5}
+                    style={{ maxWidth: 260 }}
+                  >
+                    {rebateSubmitting ? "Submitting…" : "Submit rebate request"}
+                  </button>
+                </form>
+              </div>
+
+              <div className="mm-section-heading">
+                <div>
+                  <h2>Your requests</h2>
+                  <p>Track the status of your submitted rebate requests.</p>
+                </div>
+              </div>
+
+              <div className="mm-list-panel">
+                {rebatesLoading ? (
+                  <div className="mm-empty">Loading rebate requests…</div>
+                ) : rebates.length === 0 ? (
+                  <div className="mm-empty">You have not submitted any rebate requests yet.</div>
+                ) : (
+                  rebates.map((rebate) => {
+                    const booking = bookings.find((item) => item._id === rebate.bookingId);
+                    const meal = booking ? getMealForBooking(booking) : null;
+                    const amount = rebate.amount?.$numberDecimal ?? rebate.amount ?? "0";
+
+                    return (
+                      <div className="mm-booking-row" key={rebate._id}>
+                        <div className="mm-booking-left">
+                          <div className="mm-booking-emoji">₹</div>
+                          <div>
+                            <strong>
+                              {meal ? `${meal.name} — ${meal.menu}` : "Meal rebate request"}
+                            </strong>
+                            <small>{rebate.reason || "No reason provided"}</small>
+                            <small>
+                              Amount: ₹{String(amount)} · {formatDate(rebate.createdAt)}
+                            </small>
+                          </div>
+                        </div>
+                        <span className="mm-status">{rebate.status || "PENDING"}</span>
+                      </div>
+                    );
+                  })
                 )}
               </div>
             </section>

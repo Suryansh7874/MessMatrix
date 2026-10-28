@@ -6,6 +6,13 @@ const schema = new mongoose.Schema({
   _id: { type: String, default: () => randomUUID() },
   studentId: { type: String, ref: "User", required: true },
   bookingId: { type: String, ref: "Booking", required: true },
+  reason: {
+  type: String,
+  required: true,
+  trim: true,
+  minlength: 5,
+  maxlength: 500,
+},
   amount: { type: mongoose.Schema.Types.Decimal128, required: true, min: 0 },
   status: { type: String, enum: Object.values(RebateStatus), default: RebateStatus.PENDING },
   createdAt: { type: Date, default: Date.now },

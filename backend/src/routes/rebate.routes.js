@@ -1,19 +1,16 @@
 
 import { Router } from "express";
-
 import {
   getPendingRebates,
   getMyRebates,
   getMyBillingLedger,
+  createRebateRequest,
 } from "../controllers/rebate.controller.js";
-
 import {
   authenticate,
   requireRole,
 } from "../middleware/auth.middleware.js";
-
 import { Role } from "../utils/enums.js";
-
 
 const router = Router();
 
@@ -36,6 +33,13 @@ router.get(
   authenticate,
   requireRole(Role.STUDENT),
   getMyBillingLedger
+);
+
+router.post(
+  "/",
+  authenticate,
+  requireRole(Role.STUDENT),
+  createRebateRequest
 );
 
 export default router;
