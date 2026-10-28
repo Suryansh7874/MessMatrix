@@ -39,12 +39,7 @@ export async function generateMealQR({ studentId, mealSlotId }) {
     };
   }
 
-  if (now < new Date(slot.startTime) || now >= new Date(slot.endTime)) {
-    return {
-      status: 409,
-      message: "QR generation is available only during meal service.",
-    };
-  }
+  
 
   const booking = await Booking.findOne({
     studentId,
