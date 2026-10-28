@@ -76,8 +76,16 @@ export async function lockDueMealSlots() {
   return result;
 }
 
+let schedulerRunning = false;
+
 export function startMealLockScheduler() {
   cron.schedule("* * * * *", async () => {
+    if (schedulerRunning) {
+      return;
+    }
+
+    schedulerRunning = true;
+
     try {
       const result = await lockDueMealSlots();
 
@@ -86,6 +94,8 @@ export function startMealLockScheduler() {
       }
     } catch (error) {
       console.error("Meal cutoff scheduler error:", error);
+    } finally {
+      schedulerRunning = false;
     }
   });
 }

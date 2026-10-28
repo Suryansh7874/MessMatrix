@@ -143,6 +143,8 @@ async function buildReport(slots) {
     const expectedAttendees =
       slot.finalHeadcount ?? optedIn + checkedIn;
 
+    const actualAttendees = checkedIn;
+    const pendingCheckIn = optedIn;
     const prepared = Number(slot.preparedPortions ?? 0);
     const leftovers = Number(slot.recordedLeftovers ?? 0);
 
@@ -180,7 +182,8 @@ async function buildReport(slots) {
           : 0,
     };
   });
-
+  const consumedOrDistributed =
+    Math.max(0, prepared - leftovers);
   const sum = (key) =>
     mealSlots.reduce((total, slot) => total + slot[key], 0);
 
@@ -200,6 +203,9 @@ async function buildReport(slots) {
     recordedLeftovers: totalLeftovers,
     checkedIn: totalCheckedIn,
     expectedAttendees: totalExpected,
+    actualAttendees,
+    pendingCheckIn, 
+    consumedOrDistributed,
 
     attendanceRate:
       totalExpected > 0

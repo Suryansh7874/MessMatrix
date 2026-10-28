@@ -1,22 +1,27 @@
 
 import crypto from "node:crypto";
-import mongoose from "mongoose";
 
 import Booking from "../models/Booking.js";
 import MealSlot from "../models/MealSlot.js";
 import QRToken from "../models/QRToken.js";
+
 import { BookingStatus, SlotStatus } from "../utils/enums.js";
 
-function hashToken(token) {
+export function hashToken(token) {
   return crypto.createHash("sha256").update(token).digest("hex");
 }
 
 export async function generateMealQR({ studentId, mealSlotId }) {
   if (
-    !mongoose.isValidObjectId(studentId) ||
-    !mongoose.isValidObjectId(mealSlotId)
+    typeof studentId !== "string" ||
+    !studentId.trim() ||
+    typeof mealSlotId !== "string" ||
+    !mealSlotId.trim()
   ) {
-    return { status: 400, message: "Invalid student or meal slot ID." };
+    return {
+      status: 400,
+      message: "Valid student and meal slot IDs are required.",
+    };
   }
 
   const now = new Date();
@@ -29,17 +34,17 @@ export async function generateMealQR({ studentId, mealSlotId }) {
 
   if (slot.status !== SlotStatus.OPEN || !slot.bookingLocked) {
     return {
-        status: 409,
-        message: "QR generation is available only for locked, open meal slots.",
+      status: 409,
+      message: "QR generation is available only for locked, open meal slots.",
     };
-    }
+  }
 
-    if (now >= new Date(slot.endTime)) {
+  if (now < new Date(slot.startTime) || now >= new Date(slot.endTime)) {
     return {
-        status: 409,
-        message: "This meal slot has ended.",
+      status: 409,
+      message: "QR generation is available only during meal service.",
     };
-    }
+  }
 
   const booking = await Booking.findOne({
     studentId,
@@ -57,14 +62,22 @@ export async function generateMealQR({ studentId, mealSlotId }) {
   const rawToken = crypto.randomBytes(32).toString("hex");
   const tokenHash = hashToken(rawToken);
 
-  // QRToken has a unique bookingId, so update its token rather
-  // than creating multiple token documents for the same booking.
   try {
-    await QRToken.findOneAndUpdate(
+    const qrToken = await QRToken.findOneAndUpdate(
       { bookingId: booking._id },
       {
-        $set: { tokenHash },
-        $setOnInsert: { bookingId: booking._id },
+        $set: {
+          studentId: String(booking.studentId),
+          mealSlotId: String(booking.mealSlotId),
+          tokenHash,
+          issuedAt: now,
+          expiresAt: slot.endTime,
+          isUsed: false,
+          usedAt: null,
+        },
+        $setOnInsert: {
+          bookingId: booking._id,
+        },
       },
       {
         upsert: true,
@@ -73,6 +86,14 @@ export async function generateMealQR({ studentId, mealSlotId }) {
         setDefaultsOnInsert: true,
       }
     );
+
+    return {
+      success: true,
+      message: "Meal QR token generated successfully.",
+      token: rawToken,
+      mealSlotId: String(slot._id),
+      expiresAt: qrToken.expiresAt,
+    };
   } catch (error) {
     if (error.code === 11000) {
       return {
@@ -80,17 +101,7 @@ export async function generateMealQR({ studentId, mealSlotId }) {
         message: "QR generation conflicted with another request. Please retry.",
       };
     }
+
     throw error;
   }
-
-  // Return the raw token only once. Never store it in the database.
-  return {
-    success: true,
-    message: "Meal QR token generated successfully.",
-    token: rawToken,
-    mealSlotId: String(slot._id),
-    expiresAt: slot.endTime,
-  };
 }
-
-export { hashToken };

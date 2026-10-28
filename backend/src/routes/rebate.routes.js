@@ -4,6 +4,7 @@ import { Router } from "express";
 import {
   getPendingRebates,
   getMyRebates,
+  getMyBillingLedger,
 } from "../controllers/rebate.controller.js";
 
 import {
@@ -12,6 +13,7 @@ import {
 } from "../middleware/auth.middleware.js";
 
 import { Role } from "../utils/enums.js";
+
 
 const router = Router();
 
@@ -27,6 +29,13 @@ router.get(
   authenticate,
   requireRole(Role.MESS_ADMIN),
   getPendingRebates
+);
+
+router.get(
+  "/my-ledger",
+  authenticate,
+  requireRole(Role.STUDENT),
+  getMyBillingLedger
 );
 
 export default router;

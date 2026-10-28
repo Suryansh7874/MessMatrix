@@ -1,15 +1,13 @@
-
 import { z } from "zod";
-import mongoose from "mongoose";
 
 import Booking from "../models/Booking.js";
 import MealSlot from "../models/MealSlot.js";
-import CheckIn from "../models/CheckIn.js";
 
 import { BookingStatus, SlotStatus } from "../utils/enums.js";
 
-import { generateMealQR } from "../services/qr.service.js";
+import {  generateMealQR} from "../services/qr.service.js";
 
+import { validateAndCheckIn } from "../services/checkin.service.js";
 const checkInSchema = z.object({
   studentId: z.string().trim().min(1),
 });
@@ -18,9 +16,6 @@ const portionsSchema = z.object({
   portions: z.number().int().min(0),
 });
 
-function isValidObjectId(id) {
-  return mongoose.isValidObjectId(id);
-}
 
 // --------------------------------------------------
 // MANUAL CHECK-IN
@@ -39,11 +34,6 @@ export async function checkInStudent(req, res, next) {
     const { mealSlotId } = req.params;
     const { studentId } = parsed.data;
 
-    if (!isValidObjectId(mealSlotId) || !isValidObjectId(studentId)) {
-      return res.status(400).json({
-        message: "Invalid meal slot or student ID.",
-      });
-    }
 
     const now = new Date();
     const slot = await MealSlot.findById(mealSlotId);
@@ -347,11 +337,6 @@ export async function generateMealQrToken(req, res, next) {
 
 
 export async function scanMealQr(req, res, next) {
-  if (!isValidObjectId(req.params.mealSlotId)) {
-  return res.status(400).json({
-    message: "Invalid meal slot ID.",
-  });
-}
   try {
     const result = await validateAndCheckIn({
       token: req.body?.token,
@@ -373,7 +358,6 @@ export async function scanMealQr(req, res, next) {
     next(error);
   }
 }
-
 // --------------------------------------------------
 // STUDENT ATTENDANCE HISTORY
 // --------------------------------------------------
