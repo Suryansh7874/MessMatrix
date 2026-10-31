@@ -1,5 +1,6 @@
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Html5Qrcode } from "html5-qrcode";
 import api from "../services/api";
 
 const MEAL_META = {
@@ -38,14 +39,17 @@ export default function StaffPage() {
   const [recentCheckIns, setRecentCheckIns] = useState([]);
   const [studentId, setStudentId] = useState("");
   const [qrToken, setQrToken] = useState("");
+  const [cameraScannerOpen, setCameraScannerOpen] = useState(false);
+  const scannerRef = useRef(null);
   const [preparedPortions, setPreparedPortions] = useState("");
   const [leftoverPortions, setLeftoverPortions] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
 
-  const loadMealSlots = useCallback(async () => {
-    setLoading(true);
-    try {
+  const loadMealSlots = useCallback(async ({ silent = false } = {}) => {
+  if (!silent) setLoading(true);
+
+  try {
       const response = await api.get("/meal-slots");
       const slots = Array.isArray(response.data?.mealSlots)
         ? response.data.mealSlots
@@ -74,14 +78,20 @@ export default function StaffPage() {
       setNoticeType("error");
       setNotice(errorMessage(error, "Could not load meal slots. Check the backend connection and try again."));
     } finally {
-      setLoading(false);
-    }
+  if (!silent) setLoading(false);
+}
   }, []);
 
   useEffect(() => {
     loadMealSlots();
   }, [loadMealSlots]);
+useEffect(() => {
+  const timer = setInterval(() => {
+    loadMealSlots({ silent: true });
+  }, 10000);
 
+  return () => clearInterval(timer);
+}, [loadMealSlots]);
   const meals = useMemo(() => mealSlots.map((slot) => {
     const meta = MEAL_META[slot.mealType] || { name: slot.mealType || "Meal", icon: "✧" };
     const summary = summaries[slot._id];
@@ -148,21 +158,21 @@ export default function StaffPage() {
     }
   }
 
-  async function recordQrCheckIn(event) {
-    event.preventDefault();
-    if (!selectedSlotId || !qrToken.trim() || busy) return;
+  const submitQrToken = useCallback(async (tokenValue) => {
+    const token = String(tokenValue || "").trim();
+    if (!selectedSlotId || !token || busy) return;
     setBusy(true);
     setNotice("");
     try {
       const response = await api.post(
         `/attendance/meal-slots/${encodeURIComponent(selectedSlotId)}/scan`,
-        { token: qrToken.trim() }
+        { token }
       );
       const attendance = response.data?.attendance;
       setRecentCheckIns((previous) => [{
         studentId: attendance?.studentId || "QR verified student",
         meal: currentMeal?.name || "Meal",
-        time: formatTime(attendance?.checkedInAt || new Date()),
+        time: formatTime(attendance?.checkedInAt || attendance?.scannedAt || new Date()),
         status: attendance?.status || "CHECKED_IN",
       }, ...previous]);
       setQrToken("");
@@ -176,7 +186,79 @@ export default function StaffPage() {
     } finally {
       setBusy(false);
     }
+  }, [selectedSlotId, busy, currentMeal, loadMealSlots]);
+
+  async function recordQrCheckIn(event) {
+    event.preventDefault();
+    await submitQrToken(qrToken);
   }
+
+  // Camera scanner lifecycle. Camera access requires localhost or HTTPS.
+  useEffect(() => {
+    if (!cameraScannerOpen || !selectedSlotId) return undefined;
+
+    let cancelled = false;
+    let scanHandled = false;
+    let scanner;
+
+    async function startScanner() {
+      try {
+        // Allow the scanner host element to mount before initializing it.
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        if (cancelled) return;
+
+        scanner = new Html5Qrcode("staff-qr-reader");
+        scannerRef.current = scanner;
+        await scanner.start(
+          { facingMode: "environment" },
+          { fps: 10, qrbox: { width: 250, height: 250 }, aspectRatio: 1 },
+          async (decodedText) => {
+            if (cancelled || scanHandled) return;
+            scanHandled = true;
+            // Stop the camera before making the API request so one QR can't
+            // trigger several requests from consecutive video frames.
+            try {
+              if (scanner?.isScanning) await scanner.stop();
+            } catch {
+              // Cleanup is best effort; the check-in request still proceeds.
+            }
+            scannerRef.current = null;
+            setCameraScannerOpen(false);
+            setQrToken(decodedText);
+            await submitQrToken(decodedText);
+          },
+          () => {
+            // Decode misses are normal while the camera is searching.
+          }
+        );
+      } catch (error) {
+        if (!cancelled) {
+          setCameraScannerOpen(false);
+          setNoticeType("error");
+          setNotice(
+            error?.message?.toLowerCase().includes("permission")
+              ? "Camera permission was denied. Allow camera access or paste the QR token manually."
+              : "Could not start the camera scanner. Use HTTPS/localhost and allow camera access, or paste the token manually."
+          );
+        }
+      }
+    }
+
+    startScanner();
+
+    return () => {
+      cancelled = true;
+      const activeScanner = scanner || scannerRef.current;
+      scannerRef.current = null;
+      if (activeScanner?.isScanning) {
+        activeScanner.stop()
+          .then(() => activeScanner.clear())
+          .catch(() => {});
+      } else if (activeScanner) {
+        try { activeScanner.clear(); } catch (cleanupError) { console.debug("QR scanner cleanup:", cleanupError); }
+      }
+    };
+  }, [cameraScannerOpen, selectedSlotId, submitQrToken]);
 
   async function savePortions(kind, event) {
     event.preventDefault();
@@ -1409,7 +1491,10 @@ export default function StaffPage() {
                           <small>{meal.date} · {meal.time} · {meal.status}</small>
                           <div className="rf-progress"><div style={{ width: `${progress}%` }} /></div>
                         </div>
-                        <div className="rf-meal-count">{meal.checkedIn} / {meal.expected}</div>
+                        <div className="rf-meal-count">
+  <div>{meal.booked} booked</div>
+  <small>{meal.checkedIn} checked in</small>
+</div>
                       </button>
                     );
                   })}
@@ -1452,25 +1537,48 @@ export default function StaffPage() {
                   </button>
                 </form>
 
-                <form className="rf-action-form" onSubmit={recordQrCheckIn}>
-                  <label htmlFor="staff-qr-token">QR check-in · Paste scanned QR token</label>
-                  <input
-                    id="staff-qr-token"
-                    className="rf-action-input"
-                    value={qrToken}
-                    onChange={(event) => setQrToken(event.target.value)}
-                    placeholder="Paste the student's short-lived QR token"
-                    required
+                <div className="rf-action-form">
+                  <label>QR check-in · Scan student QR</label>
+                  <button
+                    className="rf-secondary"
+                    type="button"
+                    onClick={() => setCameraScannerOpen((open) => !open)}
                     disabled={!selectedSlotId || busy}
-                  />
-                  <button className="rf-secondary" type="submit" disabled={!selectedSlotId || !qrToken.trim() || busy}>
-                    Verify QR token
+                  >
+                    {cameraScannerOpen ? "Close camera scanner" : "▦ Open camera scanner"}
                   </button>
-                </form>
-
-                <p className="rf-demo-note">
-                  Check-in is verified by the backend. QR token entry is supported here; a camera-based QR reader is not included in this component.
-                </p>
+                  {cameraScannerOpen && (
+                    <div
+                      id="staff-qr-reader"
+                      style={{
+                        width: "100%",
+                        maxWidth: 440,
+                        marginTop: 14,
+                        overflow: "hidden",
+                        borderRadius: 14,
+                        background: "#fff",
+                      }}
+                    />
+                  )}
+                  <form onSubmit={recordQrCheckIn} style={{ marginTop: 14 }}>
+                    <label htmlFor="staff-qr-token">Or paste QR token manually</label>
+                    <input
+                      id="staff-qr-token"
+                      className="rf-action-input"
+                      value={qrToken}
+                      onChange={(event) => setQrToken(event.target.value)}
+                      placeholder="Paste the student's short-lived QR token"
+                      required
+                      disabled={!selectedSlotId || busy}
+                    />
+                    <button className="rf-secondary" type="submit" disabled={!selectedSlotId || !qrToken.trim() || busy}>
+                      {busy ? "Verifying…" : "Verify QR token"}
+                    </button>
+                  </form>
+                  <p className="rf-demo-note">
+                    Scan the QR displayed in the student's My Bookings section. The server validates the token and prevents repeat redemption.
+                  </p>
+                </div>
 
                 <div className="rf-action-form">
                   <div className="rf-section-ornament">✧ PORTIONS & LEFTOVERS</div>

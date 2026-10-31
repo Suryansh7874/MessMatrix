@@ -159,7 +159,7 @@ async function generateQR(booking) {
       setNotice(
         errorMessage(
           error,
-          "Could not load meal slots and bookings. Check that the backend is running and try again."
+          "Could not load meal slots and bookings. "
         )
       );
     } finally {
@@ -334,13 +334,35 @@ async function generateQR(booking) {
       );
   }, [mealSlots, bookings, clock]);
 
-  const activeBookings = useMemo(
-    () =>
-      bookings.filter(
-        (booking) => booking.status === "OPTED_IN"
-      ),
-    [bookings]
-  );
+const activeBookings = useMemo(() => {
+  return bookings.filter((booking) => {
+    // Only opted-in bookings are active
+    if (booking.status !== "OPTED_IN") return false;
+
+    // Extra protection against already checked-in bookings
+    if (booking.checkedInAt) return false;
+
+    const slotId =
+      typeof booking.mealSlotId === "object"
+        ? booking.mealSlotId?._id
+        : booking.mealSlotId;
+
+    const slot =
+      mealSlots.find((s) => s._id === slotId) ||
+      (typeof booking.mealSlotId === "object"
+        ? booking.mealSlotId
+        : null);
+
+    if (!slot?.endTime) return false;
+
+    const endTime = new Date(slot.endTime);
+
+    return (
+      !Number.isNaN(endTime.getTime()) &&
+      endTime > clock
+    );
+  });
+}, [bookings, mealSlots, clock]);
 
   const getMealForBooking = useCallback(
     (booking) => {
@@ -1598,8 +1620,7 @@ async function generateQR(booking) {
                 <div>
                   <h2>Active reservations</h2>
                   <p>
-                    Cancel a reservation only while the
-                    backend still allows changes.
+                    Cancel a reservation only when you don't want.
                   </p>
                 </div>
 

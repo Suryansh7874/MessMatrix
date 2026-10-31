@@ -13,7 +13,7 @@ export default function Navbar() {
     <header className="site-header">
       <nav className="nav-inner" aria-label="Main navigation">
         <a href="#home" className="brand-mark">
-          <span className="brand-seal">✺</span>
+          <span className="brand-seal">✧</span>
           <span><strong>MESSMATRIX</strong><small>KAMAR-TAJ REFECTORY</small></span>
         </a>
         <div className="desktop-nav">

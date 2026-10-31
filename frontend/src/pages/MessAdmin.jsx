@@ -31,6 +31,7 @@ export default function MessAdmin() {
   const [staff, setStaff] = useState([]);
   const [inventory, setInventory] = useState([]);
   const [overview, setOverview] = useState(null);
+  const [recentAttendance, setRecentAttendance] = useState([]);
   const [search, setSearch] = useState("");
   const [bookingFilter, setBookingFilter] = useState("All");
   const [toast, setToast] = useState("");
@@ -48,6 +49,7 @@ export default function MessAdmin() {
   });
   const [mealForm, setMealForm] = useState({
     name: "",
+    date: getLocalDateInputValue(),
     time: "",
     menu: "",
     price: "0",
@@ -153,7 +155,11 @@ export default function MessAdmin() {
             menu: menu?.description || menu?.name || "Menu details unavailable",
             price: Number(menu?.price?.$numberDecimal ?? menu?.price ?? 0),
             capacity: Number(slot.preparedPortions ?? slot.finalHeadcount ?? 0),
-            booked: Number(headcount.currentOptedInCount ?? 0),
+            booked: Number(
+                headcount.totalBooked ??
+                headcount.currentOptedInCount ??
+                0
+              ),
             open: slot.status === "OPEN" && !slot.bookingLocked && new Date(slot.cutoffTime) > new Date(),
             status: slot.status,
             menuId: menu?._id ?? slot.menuId,
@@ -168,6 +174,104 @@ export default function MessAdmin() {
 
     loadDashboardData();
     return () => { cancelled = true; };
+  }, []);
+
+  // Keep the attendance KPI and recent verified check-ins in sync while the
+  // admin dashboard remains open. Staff check-ins update the Booking record.
+  useEffect(() => {
+    let cancelled = false;
+
+    const refreshAttendance = async () => {
+      try {
+        const slotsResponse = await api.get("/meal-slots");
+        const slots = Array.isArray(slotsResponse.data?.mealSlots)
+          ? slotsResponse.data.mealSlots
+          : [];
+        const [
+  overviewResult,
+  attendanceResults,
+  headcountResults,
+] = await Promise.all([
+  api.get("/analytics/overview").catch(() => null),
+
+  Promise.allSettled(
+    slots.map((slot) =>
+      api.get(
+        `/attendance/meal-slots/${encodeURIComponent(slot._id)}/attendance`
+      ).then((response) => ({
+        slot,
+        data: response.data,
+      }))
+    )
+  ),
+
+  Promise.allSettled(
+    slots.map((slot) =>
+      api.get(
+        `/meal-slots/${encodeURIComponent(slot._id)}/headcount`
+      )
+    )
+  ),
+]);
+
+        if (cancelled) return;
+        if (overviewResult) setOverview(overviewResult.data);
+        setMeals((previousMeals) =>
+  previousMeals.map((meal) => {
+    const index = slots.findIndex(
+      (slot) => slot._id === meal.id
+    );
+
+    if (index === -1) return meal;
+
+    const result = headcountResults[index];
+
+    // Preserve the previous count if the API request fails.
+    if (result.status !== "fulfilled") return meal;
+
+    const data = result.value.data;
+
+    return {
+      ...meal,
+      booked: Number(
+        data.totalBooked ??
+        data.currentOptedInCount ??
+        meal.booked
+      ),
+    };
+  })
+);
+        const rows = [];
+        attendanceResults.forEach((result) => {
+          if (result.status !== "fulfilled") return;
+          const { slot, data } = result.value;
+          (Array.isArray(data?.attendance) ? data.attendance : []).forEach((entry) => {
+            const student = entry.studentId && typeof entry.studentId === "object"
+              ? entry.studentId
+              : null;
+            rows.push({
+              id: String(entry._id || entry.bookingId || `${slot._id}-${entry.checkedInAt || ""}`),
+              studentName: student?.name || student?.email || "Student",
+              studentId: student?.studentId || student?._id || (typeof entry.studentId === "string" ? entry.studentId : ""),
+              meal: String(slot.mealType || "Meal").replaceAll("_", " "),
+              checkedInAt: entry.checkedInAt || entry.scannedAt || null,
+              status: entry.status || "CHECKED_IN",
+            });
+          });
+        });
+        rows.sort((a, b) => new Date(b.checkedInAt || 0) - new Date(a.checkedInAt || 0));
+        setRecentAttendance(rows.slice(0, 8));
+      } catch {
+        // Keep the last known dashboard data if a periodic refresh fails.
+      }
+    };
+
+    refreshAttendance();
+    const timer = setInterval(refreshAttendance, 10000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, []);
 
   useEffect(() => {
@@ -297,8 +401,8 @@ export default function MessAdmin() {
   const addMeal = async (event) => {
     event.preventDefault();
 
-    if (!mealForm.name.trim() || !mealForm.time.trim()) {
-      notify("Enter a meal name and serving time.");
+    if (!mealForm.name.trim() || !mealForm.date || !mealForm.time.trim()) {
+      notify("Enter a meal name, date, and serving time.");
       return;
     }
 
@@ -328,7 +432,7 @@ export default function MessAdmin() {
 
     let serviceWindow;
     try {
-      serviceWindow = parseServingWindow(mealForm.time);
+      serviceWindow = parseServingWindow(mealForm.time, mealForm.date);
     } catch (error) {
       notify(error.message);
       return;
@@ -353,7 +457,14 @@ export default function MessAdmin() {
         cutoffTime: serviceWindow.cutoff.toISOString(),
       });
 
-      setMealForm({ name: "", time: "", menu: "", price: "0", capacity: "200" });
+      setMealForm({
+        name: "",
+        date: getLocalDateInputValue(),
+        time: "",
+        menu: "",
+        price: "0",
+        capacity: "200",
+      });
       setShowMealForm(false);
       notify("Meal slot created. Capacity is not stored by the current backend model.");
 
@@ -381,7 +492,11 @@ export default function MessAdmin() {
           menu: menu?.description || menu?.name || "Menu details unavailable",
           price: Number(menu?.price?.$numberDecimal ?? menu?.price ?? 0),
           capacity: Number(slot.preparedPortions ?? slot.finalHeadcount ?? 0),
-          booked: Number(count.currentOptedInCount ?? 0),
+          booked: Number(
+  count.totalBooked ??
+  count.currentOptedInCount ??
+  0
+),
           open: slot.status === "OPEN" && !slot.bookingLocked && new Date(slot.cutoffTime) > new Date(),
           status: slot.status,
           menuId: menu?._id ?? slot.menuId,
@@ -1889,8 +2004,59 @@ export default function MessAdmin() {
               <Stat icon="♙" label="Registered Staff" value={staff.length} trend={`${activeStaff} active`} foot="Staff directory records" />
               <Stat icon="♨" label="Prepared Portions" value={totalCapacity.toLocaleString("en-IN")} trend="All sessions" foot={`${totalBooked.toLocaleString("en-IN")} opted-in bookings`} />
               <Stat icon="▤" label="Checked-In Attendees" value={checkedInAttendees} trend="Attendance" foot={`${Number(overview?.expectedAttendees ?? 0)} expected attendees`} />
-              <Stat icon="▧" label="Low Stock Alerts" value={lowStock} trend={lowStock ? "Attention needed" : "All in order"} foot="Inventory below minimum level" />
+              { lowStock !== undefined && (
+                <Stat icon="▧" label="Low Stock Alerts" value={lowStock} trend={lowStock ? "Attention needed" : "All in order"} foot="Inventory below minimum level" />
+              ) }
             </div>
+
+            <section className="mm-panel" style={{ marginBottom: 24 }}>
+              <div className="mm-panel-title">
+                <div>
+                  <h3>Recent Verified Check-ins</h3>
+                  <p>Refreshes automatically every 10 seconds while this dashboard is open.</p>
+                </div>
+                <span className="mm-tag">✧ Live attendance</span>
+              </div>
+              {recentAttendance.length === 0 ? (
+                <p style={{ color: "var(--mm-muted, #8c8a84)", margin: "14px 0 2px" }}>
+                  No check-ins recorded for the currently available meal slots yet.
+                </p>
+              ) : (
+                <div style={{ display: "grid", gap: 10, marginTop: 14 }}>
+                  {recentAttendance.map((entry) => (
+                    <div
+                      key={entry.id}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: 16,
+                        flexWrap: "wrap",
+                        padding: "12px 14px",
+                        border: "1px solid rgba(214,183,119,.16)",
+                        borderRadius: 12,
+                        background: "rgba(255,255,255,.025)",
+                      }}
+                    >
+                      <div>
+                        <strong style={{ display: "block" }}>{entry.studentName}</strong>
+                        <span style={{ color: "var(--mm-muted, #8c8a84)", fontSize: 12 }}>
+                          {entry.meal}{entry.studentId ? ` · ${entry.studentId}` : ""}
+                        </span>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <strong style={{ color: "#86c6a7", fontSize: 12 }}>{entry.status}</strong>
+                        <span style={{ display: "block", color: "var(--mm-muted, #8c8a84)", fontSize: 12 }}>
+                          {entry.checkedInAt
+                            ? new Date(entry.checkedInAt).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" })
+                            : "Time unavailable"}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
 
             <div className="mm-section-head">
               <div>
@@ -2021,10 +2187,20 @@ export default function MessAdmin() {
             {showMealForm && (
               <form className="mm-form-panel" onSubmit={addMeal}>
                 <h3>✧ Inscribe a New Meal Session</h3>
-                <p>Set the meal's name, serving time, menu, price, and seating capacity.</p>
+                <p>Choose the service date and time, then enter the menu, price, and seating capacity. Past or too-soon meal times are rejected instead of silently moved to tomorrow.</p>
                 <div className="mm-form-grid">
                   <Field label="Meal name" full>
                     <input className="mm-input" required placeholder="e.g. Special Dinner" value={mealForm.name} onChange={(e) => setMealForm({ ...mealForm, name: e.target.value })} />
+                  </Field>
+                  <Field label="Meal date">
+                    <input
+                      className="mm-input"
+                      type="date"
+                      required
+                      min={getLocalDateInputValue()}
+                      value={mealForm.date}
+                      onChange={(e) => setMealForm({ ...mealForm, date: e.target.value })}
+                    />
                   </Field>
                   <Field label="Serving time">
                     <input className="mm-input" required placeholder="e.g. 7:30 PM – 9:00 PM" value={mealForm.time} onChange={(e) => setMealForm({ ...mealForm, time: e.target.value })} />
@@ -2594,34 +2770,60 @@ function formatTime(date) {
   return date.toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", hour12: true });
 }
 
-function parseServingWindow(input) {
+function getLocalDateInputValue() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function parseServingWindow(input, dateValue) {
   const match = input.match(/(\d{1,2}:\d{2}\s*[AP]M)\s*(?:–|-|to)\s*(\d{1,2}:\d{2}\s*[AP]M)/i);
   if (!match) throw new Error("Use a time range like 7:30 PM – 9:00 PM.");
+  if (!dateValue) throw new Error("Please select a meal date.");
 
   const parseClock = (value) => {
     const parts = value.trim().match(/^(\d{1,2}):(\d{2})\s*([AP]M)$/i);
     if (!parts) throw new Error("Use a time range like 7:30 PM – 9:00 PM.");
-    let hour = Number(parts[1]) % 12;
+
+    const hourInput = Number(parts[1]);
+    const minute = Number(parts[2]);
+    if (hourInput < 1 || hourInput > 12 || minute < 0 || minute > 59) {
+      throw new Error("Enter a valid serving time.");
+    }
+
+    let hour = hourInput % 12;
     if (parts[3].toUpperCase() === "PM") hour += 12;
-    return { hour, minute: Number(parts[2]) };
+    return { hour, minute };
   };
+
+  const [year, month, day] = dateValue.split("-").map(Number);
+  const start = new Date(year, month - 1, day);
+  if (
+    Number.isNaN(start.getTime()) ||
+    start.getFullYear() !== year ||
+    start.getMonth() !== month - 1 ||
+    start.getDate() !== day
+  ) {
+    throw new Error("Please select a valid meal date.");
+  }
 
   const startClock = parseClock(match[1]);
   const endClock = parseClock(match[2]);
-  const now = new Date();
-  const start = new Date();
   start.setHours(startClock.hour, startClock.minute, 0, 0);
 
-  // Schedule the next occurrence with enough time for the 30-minute cutoff.
-  if (start.getTime() <= now.getTime() + 45 * 60 * 1000) {
-    start.setDate(start.getDate() + 1);
-  }
-
-  const end = new Date(start);
+  const end = new Date(year, month - 1, day);
   end.setHours(endClock.hour, endClock.minute, 0, 0);
+  // Support overnight service windows, e.g. 11:00 PM – 1:00 AM.
   if (end <= start) end.setDate(end.getDate() + 1);
 
+  const now = new Date();
   const cutoff = new Date(start.getTime() - 30 * 60 * 1000);
+  if (start <= now || cutoff <= now) {
+    throw new Error("The meal must start at least 30 minutes from now. Choose a future date and time.");
+  }
+
   return { start, end, cutoff };
 }
 

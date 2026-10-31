@@ -29,8 +29,8 @@ export default function Footer() {
         <div className="footer-contact">
           <h3>Stay connected</h3>
           <p>Questions or feedback about your dining experience?</p>
-          <a className="footer-mail" href="mailto:support@messmatrix.example">support@messmatrix.example</a>
-          <p className="footer-note">Replace this demo contact with your official mess or campus contact before publishing.</p>
+          <a className="footer-mail" href="mailto:vaibhavsingh789g@gmail.com">vaibhavsingh789g@gmail.com</a>
+         <p>Follow us on social media for updates and announcements.</p>
         </div>
       </div>
       <div className="footer-bottom">
