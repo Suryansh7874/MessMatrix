@@ -113,17 +113,46 @@ export async function getHeadcount(req, res, next) {
       });
     }
 
-    const headcount = await Booking.countDocuments({
-      mealSlotId: slot._id,
-      status: {
-        $in: [BookingStatus.OPTED_IN, BookingStatus.CHECKED_IN],
-      },
-    });
+    const [
+      optedIn,
+      checkedIn,
+      noShow,
+      cancelled,
+      optedOut,
+    ] = await Promise.all([
+      Booking.countDocuments({
+        mealSlotId: slot._id,
+        status: BookingStatus.OPTED_IN,
+      }),
+      Booking.countDocuments({
+        mealSlotId: slot._id,
+        status: BookingStatus.CHECKED_IN,
+      }),
+      Booking.countDocuments({
+        mealSlotId: slot._id,
+        status: BookingStatus.NO_SHOW,
+      }),
+      Booking.countDocuments({
+        mealSlotId: slot._id,
+        status: BookingStatus.CANCELLED,
+      }),
+      Booking.countDocuments({
+        mealSlotId: slot._id,
+        status: BookingStatus.OPTED_OUT,
+      }),
+    ]);
+
+    const totalBooked = optedIn + checkedIn;
 
     return res.json({
       mealSlotId: slot._id,
+      totalBooked,
+      pendingCheckIn: optedIn,
+      checkedIn,
+      noShow,
+      cancelled,
+      optedOut,
       finalHeadcount: slot.finalHeadcount,
-      currentOptedInCount: headcount,
       bookingLocked: slot.bookingLocked,
     });
   } catch (error) {

@@ -8,7 +8,7 @@ import { BookingStatus, SlotStatus } from "../utils/enums.js";
 import {  generateMealQR} from "../services/qr.service.js";
 
 import { validateAndCheckIn } from "../services/checkin.service.js";
-
+import User from "../models/User.js";
 
 const checkInSchema = z.object({
   studentId: z.string().trim().min(1),
@@ -29,15 +29,15 @@ export async function checkInStudent(req, res, next) {
 
     if (!parsed.success) {
       return res.status(400).json({
-        message: "A valid studentId is required.",
+        message: "Please enter a valid student ID.",
       });
     }
 
     const { mealSlotId } = req.params;
-    const { studentId } = parsed.data;
-
-
+    const enteredId = parsed.data.studentId.trim();
     const now = new Date();
+
+    // Find the selected meal slot
     const slot = await MealSlot.findById(mealSlotId);
 
     if (!slot) {
@@ -58,9 +58,26 @@ export async function checkInStudent(req, res, next) {
       });
     }
 
+    // Find the student using their roll number or internal UUID
+    const student = await User.findOne({
+      $or: [
+        { studentId: enteredId },
+        { _id: enteredId },
+      ],
+      role: "STUDENT",
+      isActive: true,
+    });
+
+    if (!student) {
+      return res.status(404).json({
+        message: "No active student found with this ID.",
+      });
+    }
+
+    // Booking.studentId stores the student's internal UUID
     const booking = await Booking.findOneAndUpdate(
       {
-        studentId,
+        studentId: student._id,
         mealSlotId: slot._id,
         status: BookingStatus.OPTED_IN,
       },
@@ -79,13 +96,13 @@ export async function checkInStudent(req, res, next) {
 
     if (!booking) {
       const existing = await Booking.findOne({
-        studentId,
+        studentId: student._id,
         mealSlotId: slot._id,
       });
 
       if (!existing) {
         return res.status(404).json({
-          message: "No booking exists for this student and meal slot.",
+          message: "This student has no booking for the selected meal.",
         });
       }
 
@@ -104,7 +121,8 @@ export async function checkInStudent(req, res, next) {
       message: "Student checked in successfully.",
       attendance: {
         bookingId: booking._id,
-        studentId: booking.studentId,
+        studentId: student.studentId || student._id,
+        studentName: student.name,
         mealSlotId: booking.mealSlotId,
         status: booking.status,
         checkedInAt: booking.checkedInAt,

@@ -107,14 +107,18 @@ export async function lockDueMealSlots() {
   return result;
 }
 
+
 export async function closeDueMealSlots() {
   const now = new Date();
 
+  // Include already-closed slots so failed no-show processing can retry.
   const due = await MealSlot.find({
-    status: SlotStatus.OPEN,
+    status: {
+      $in: [SlotStatus.OPEN, SlotStatus.CLOSED],
+    },
     endTime: { $lte: now },
   })
-    .select("_id")
+    .select("_id status")
     .lean();
 
   const result = {
@@ -127,48 +131,57 @@ export async function closeDueMealSlots() {
 
   for (const candidate of due) {
     try {
-      // Only one scheduler run can claim an OPEN slot.
-      const slot = await MealSlot.findOneAndUpdate(
-        {
-          _id: candidate._id,
-          status: SlotStatus.OPEN,
-          endTime: { $lte: now },
-        },
-        {
-          $set: {
-            status: SlotStatus.CLOSED,
-            bookingLocked: true,
-          },
-        },
-        {
-          new: true,
-          runValidators: true,
-        }
-      );
+      let slot;
 
-      if (!slot) {
-        result.skipped += 1;
-        continue;
+      if (candidate.status === SlotStatus.OPEN) {
+        // Atomically close the slot.
+        slot = await MealSlot.findOneAndUpdate(
+          {
+            _id: candidate._id,
+            status: SlotStatus.OPEN,
+            endTime: { $lte: now },
+          },
+          {
+            $set: {
+              status: SlotStatus.CLOSED,
+              bookingLocked: true,
+            },
+          },
+          {
+            new: true,
+            runValidators: true,
+          }
+        );
+
+        if (!slot) {
+          result.skipped += 1;
+          continue;
+        }
+
+        result.closed += 1;
+      } else {
+        // Slot was closed in an earlier scheduler run.
+        slot = candidate;
       }
 
-      result.closed += 1;
-
-      // Only bookings still OPTED_IN at closing become NO_SHOW.
-      const noShowBookings = await Booking.find({
+      // Find bookings that are still pending after meal service.
+      const pendingBookings = await Booking.find({
         mealSlotId: slot._id,
         status: BookingStatus.OPTED_IN,
+        checkedInAt: null,
       })
         .select("_id studentId")
         .lean();
 
-      for (const booking of noShowBookings) {
+      for (const booking of pendingBookings) {
         try {
-          // Conditionally update to avoid penalizing a concurrent check-in.
+          // Atomic status transition prevents double processing.
           const updatedBooking = await Booking.findOneAndUpdate(
             {
               _id: booking._id,
               mealSlotId: slot._id,
               status: BookingStatus.OPTED_IN,
+              checkedInAt: null,
             },
             {
               $set: {
@@ -183,30 +196,41 @@ export async function closeDueMealSlots() {
 
           if (!updatedBooking) continue;
 
-          await awardPoints({
-            studentId: String(updatedBooking.studentId),
-            mealSlotId: String(slot._id),
-            bookingId: String(updatedBooking._id),
-            reason: "NO_SHOW",
-            referenceKey: `noshow:${updatedBooking._id}`,
-          });
-
+          // Count the status transition independently of point awarding.
           result.noShows += 1;
+
+          try {
+            await awardPoints({
+              studentId: String(updatedBooking.studentId),
+              mealSlotId: String(slot._id),
+              bookingId: String(updatedBooking._id),
+              reason: "NO_SHOW",
+              referenceKey: `noshow:${updatedBooking._id}`,
+            });
+          } catch (pointsError) {
+            console.error(
+              `No-show recorded, but points processing failed for booking ${booking._id}:`,
+              pointsError
+            );
+          }
         } catch (error) {
           console.error(
-            `Failed to process no-show booking ${booking._id}:`,
+            `Failed to mark booking ${booking._id} as NO_SHOW:`,
             error
           );
         }
       }
 
-      console.log(
-        `Closed meal slot ${slot._id}. No-shows processed: ${result.noShows}`
-      );
+      if (result.noShows > 0 || candidate.status === SlotStatus.OPEN) {
+        console.log(
+          `Processed ended meal slot ${slot._id}. No-shows marked in this run: ${result.noShows}`
+        );
+      }
     } catch (error) {
       result.failed += 1;
+
       console.error(
-        `Failed to close meal slot ${candidate._id}:`,
+        `Failed to process ended meal slot ${candidate._id}:`,
         error
       );
     }
@@ -214,6 +238,7 @@ export async function closeDueMealSlots() {
 
   return result;
 }
+
 
 let schedulerRunning = false;
 

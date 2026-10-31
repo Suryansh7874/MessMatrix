@@ -61,7 +61,12 @@ export async function validateAndCheckIn({
       message: "Booking associated with this QR was not found.",
     };
   }
-
+console.log("QR slot verification:", {
+  expectedMealSlotId,
+  bookingMealSlotId: String(booking.mealSlotId),
+  qrTokenMealSlotId: String(qrToken.mealSlotId),
+  bookingId: String(booking._id),
+});
   if (String(booking.mealSlotId) !== expectedMealSlotId) {
     return {
       status: 401,
@@ -74,6 +79,14 @@ export async function validateAndCheckIn({
   if (!slot) {
     return { status: 404, message: "Meal slot not found." };
   }
+  console.log("MEAL SERVICE DEBUG:", {
+  now: new Date().toISOString(),
+  slotStatus: slot.status,
+  startTime: slot.startTime,
+  endTime: slot.endTime,
+  startTimeISO: new Date(slot.startTime).toISOString(),
+  endTimeISO: new Date(slot.endTime).toISOString(),
+});
 
   if (
     slot.status !== SlotStatus.OPEN ||
@@ -164,6 +177,7 @@ export async function validateAndCheckIn({
 
     const checkIn = await CheckIn.create({
       qrTokenId: String(claimedToken._id),
+      bookingId: String(updatedBooking._id),
       studentId: String(updatedBooking.studentId),
       mealSlotId: String(slot._id),
       scannedBy,

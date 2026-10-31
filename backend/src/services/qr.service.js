@@ -29,18 +29,31 @@ export async function generateMealQR({ studentId, mealSlotId }) {
   const slot = await MealSlot.findById(mealSlotId).lean();
 
   if (!slot) {
-    return { status: 404, message: "Meal slot not found." };
-  }
-
-  if (slot.status !== SlotStatus.OPEN || !slot.bookingLocked) {
     return {
-      status: 409,
-      message: "QR generation is available only for locked, open meal slots.",
+      status: 404,
+      message: "Meal slot not found.",
     };
   }
 
-  
+  // The slot must be open, but bookingLocked can be true OR false.
+  // Locking bookings must not prevent QR generation for existing bookings.
+  if (slot.status !== SlotStatus.OPEN) {
+    return {
+      status: 409,
+      message: "QR generation is available only for open meal slots.",
+    };
+  }
 
+  // Never generate a QR that is already expired.
+  if (!slot.endTime || now >= new Date(slot.endTime)) {
+    return {
+      status: 409,
+      message:
+        "QR generation is unavailable because the meal serving window has ended.",
+    };
+  }
+
+  // The student must already have an eligible booking.
   const booking = await Booking.findOne({
     studentId,
     mealSlotId,
@@ -50,7 +63,8 @@ export async function generateMealQR({ studentId, mealSlotId }) {
   if (!booking) {
     return {
       status: 409,
-      message: "An active opted-in booking is required to generate a QR.",
+      message:
+        "An active opted-in booking is required to generate a QR.",
     };
   }
 
@@ -93,7 +107,8 @@ export async function generateMealQR({ studentId, mealSlotId }) {
     if (error.code === 11000) {
       return {
         status: 409,
-        message: "QR generation conflicted with another request. Please retry.",
+        message:
+          "QR generation conflicted with another request. Please retry.",
       };
     }
 

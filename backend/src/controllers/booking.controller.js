@@ -76,6 +76,7 @@ export async function setBooking(req, res, next) {
           status: "OPEN",
           bookingLocked: false,
           cutoffTime: { $gt: now },
+          endTime: { $gt: now },
         },
         { $set: { updatedAt: now } },
         { new: true }
